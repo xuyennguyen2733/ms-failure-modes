@@ -1,5 +1,12 @@
 #!/bin/bash
 
+# Ensure background jobs are killed if the script is interrupted
+trap 'kill $(jobs -p)' SIGINT SIGTERM EXIT
+
+# Get epochs from first argument, default to 300
+N_EPOCHS=${1:-300}
+echo "Training for $N_EPOCHS epochs."
+
 # 1. Install Dependencies
 #echo "Installing dependencies..."
 #pip install -r requirements.txt
@@ -35,11 +42,12 @@ if [ "$GPU_COUNT" -ge 2 ]; then
             mkdir -p "experiments_unet/seed${seed}"
             python src/train_unet.py \
                 --seed $seed \
+                --n_epochs $N_EPOCHS \
                 --path_train_data "$TRAIN_DATA" \
                 --path_train_gts "$TRAIN_GTS" \
                 --path_val_data "$VAL_DATA" \
                 --path_val_gts "$VAL_GTS" \
-                --path_save "experiments_unet/seed${seed}"
+                --path_save "experiments_unet/seed${seed}" || exit 1
         done
     ) &
     
@@ -51,11 +59,12 @@ if [ "$GPU_COUNT" -ge 2 ]; then
             mkdir -p "experiments_swin/seed${seed}"
             python src/train_swin.py \
                 --seed $seed \
+                --n_epochs $N_EPOCHS \
                 --path_train_data "$TRAIN_DATA" \
                 --path_train_gts "$TRAIN_GTS" \
                 --path_val_data "$VAL_DATA" \
                 --path_val_gts "$VAL_GTS" \
-                --path_save "experiments_swin/seed${seed}"
+                --path_save "experiments_swin/seed${seed}" || exit 1
         done
     ) &
     
@@ -71,11 +80,12 @@ else
         mkdir -p "experiments_unet/seed${seed}"
         python src/train_unet.py \
             --seed $seed \
+            --n_epochs $N_EPOCHS \
             --path_train_data "$TRAIN_DATA" \
             --path_train_gts "$TRAIN_GTS" \
             --path_val_data "$VAL_DATA" \
             --path_val_gts "$VAL_GTS" \
-            --path_save "experiments_unet/seed${seed}"
+            --path_save "experiments_unet/seed${seed}" || exit 1
     done
 
     # Swin
@@ -84,11 +94,12 @@ else
         mkdir -p "experiments_swin/seed${seed}"
         python src/train_swin.py \
             --seed $seed \
+            --n_epochs $N_EPOCHS \
             --path_train_data "$TRAIN_DATA" \
             --path_train_gts "$TRAIN_GTS" \
             --path_val_data "$VAL_DATA" \
             --path_val_gts "$VAL_GTS" \
-            --path_save "experiments_swin/seed${seed}"
+            --path_save "experiments_swin/seed${seed}" || exit 1
     done
     
     echo "Sequential training complete."
