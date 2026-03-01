@@ -134,11 +134,11 @@ def main(args):
                 epoch_loss += loss.item()
                 if step % 100 == 0:
                     step_print = int(step/2)
-                    print(f"{step_print}/{(len(train_loader)*n_samples) // (train_loader.batch_size*2)}, train_loss: {loss.item():.4f}")
+                    print(f"[Swin] {step_print}/{(len(train_loader)*n_samples) // (train_loader.batch_size*2)}, train_loss: {loss.item():.4f}")
 
         epoch_loss /= step_print
         epoch_loss_values.append(epoch_loss)
-        print(f"epoch {epoch + 1} average loss: {epoch_loss:.4f}")
+        print(f"[Swin] epoch {epoch + 1} average loss: {epoch_loss:.4f}")
         
         ''' Validation '''
         if (epoch + 1) % val_interval == 0:
