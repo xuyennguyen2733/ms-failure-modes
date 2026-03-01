@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # 1. Install Dependencies
-echo "Installing dependencies..."
-pip install -r requirements.txt
+#echo "Installing dependencies..."
+#pip install -r requirements.txt
 
 # 2. Set Paths (Assumes you upload the 'data' folder to the project root)
 TRAIN_DATA="data/train/flair"
