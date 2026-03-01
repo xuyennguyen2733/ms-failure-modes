@@ -1,4 +1,5 @@
 #!/bin/bash
+#chmod +x cloud_train.sh
 #apt update -y && apt install -y python3.9 python3.9-venv
 # Function to handle interruption (Ctrl+C)
 handle_interrupt() {
