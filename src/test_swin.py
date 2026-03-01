@@ -17,8 +17,8 @@ from uncertainty import ensemble_uncertainties_classification
 
 parser = argparse.ArgumentParser(description='Get all command line arguments.')
 # model
-parser.add_argument('--num_models', type=int, default=3,
-                    help='Number of models in ensemble')
+parser.add_argument('--seeds', nargs='+', type=int, default=[1, 2, 3],
+                    help='List of seeds for ensemble')
 parser.add_argument('--path_model', type=str, default='',
                     help='Specify the dir to al the trained models')
 # data
@@ -58,7 +58,8 @@ def main(args):
                                     bm_path=args.path_bm)
 
     ''' Load trained models  '''
-    K = args.num_models
+    seeds = args.seeds
+    K = len(seeds)
     models = []
     for i in range(K):
         models.append(SwinUNETR(
@@ -66,14 +67,15 @@ def main(args):
             in_channels=1,
             out_channels=2,
             feature_size=48,
-            use_checkpoint=True,
+            use_checkpoint=False,
             spatial_dims=3
         ).to(device))
 
-    for i, model in enumerate(models):
+    for i, seed in enumerate(seeds):
+        model = models[i]
         model.load_state_dict(torch.load(os.path.join(args.path_model,
-                                                      f"seed{i + 1}",
-                                                      "Best_model_finetuning.pth")))
+                                                      f"seed{seed}",
+                                                      "Best_model_finetuning.pth"), map_location=device))
         model.eval()
 
     act = torch.nn.Softmax(dim=1)

@@ -1,1 +1,4 @@
 venv/
+experiments_swin/
+experiments_unet/
+checkpoints/

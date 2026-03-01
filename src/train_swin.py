@@ -115,6 +115,7 @@ def main(args):
                 inputs, labels = (
                     batch_data["image"][m:(m+2)].to(device),
                     batch_data["label"][m:(m+2)].type(torch.LongTensor).to(device))
+                inputs.requires_grad = True
                 optimizer.zero_grad()
                 outputs = model(inputs)
                 

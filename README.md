@@ -29,6 +29,13 @@ This project investigates the failure modes of deep learning models in medical i
 
 ## How to Run
 
+### 0. Run with `run.py`
+
+```bash
+python run.py --epochs 300 --seeds 1 2 3
+# Optional flags: --skip_install --skip_train --skip_eval --skip_audit
+```
+
 ### 1. Requirements
 
 Install the necessary dependencies:
@@ -141,4 +148,5 @@ audit.bat
 This project builds upon the baseline code provided by the **Shifts 2.0 Benchmark**.
 
 - The following files are borrowed directly or adapted from the Shifts 2.0 baseline project: `src/data_load.py`, `src/inference.py`, `src/metrics.py`, `src/retention_curves.py`, `src/train_unet.py`, and `src/test_unet.py`.
+- The Swin UNETR implementation (`src/train_swin.py` and `src/test_swin.py`) was written for this project, following the structure of the baseline and utilizing its utility functions (e.g., `data_load`).
 - The Swin UNETR implementation (`src/train_swin.py` and `src/test_swin.py`) was written for this project, following the structure of the baseline and utilizing its utility functions (e.g., `data_load`).

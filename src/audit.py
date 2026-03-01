@@ -102,7 +102,7 @@ def main(args):
     print("Loading Swin UNETR Ensemble...")
     swin_models = load_ensemble(SwinUNETR, args.path_swin, args.num_models, device,
                                 img_size=(96, 96, 96), in_channels=1, out_channels=2,
-                                feature_size=48, use_checkpoint=True, spatial_dims=3)
+                                feature_size=48, use_checkpoint=False, spatial_dims=3)
 
     act = torch.nn.Softmax(dim=1)
     roi_size = (96, 96, 96)
