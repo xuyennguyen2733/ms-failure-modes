@@ -9,6 +9,7 @@ handle_interrupt() {
     if [ -n "$(jobs -p)" ]; then
         kill $(jobs -p) 2>/dev/null
     fi
+    pkill -f python 2>/dev/null
 
     if [ -n "$RUNPOD_POD_ID" ]; then
         # Ask user with 10s timeout
@@ -74,9 +75,8 @@ if [ "$GPU_COUNT" -ge 2 ]; then
                 --path_train_gts "$TRAIN_GTS" \
                 --path_val_data "$VAL_DATA" \
                 --path_val_gts "$VAL_GTS" \
-                --path_save "experiments_unet/seed${seed}" &
+                --path_save "experiments_unet/seed${seed}"
         done
-        wait
     ) &
     
     # Run Swin on GPU 1
@@ -92,16 +92,15 @@ if [ "$GPU_COUNT" -ge 2 ]; then
                 --path_train_gts "$TRAIN_GTS" \
                 --path_val_data "$VAL_DATA" \
                 --path_val_gts "$VAL_GTS" \
-                --path_save "experiments_swin/seed${seed}" &
+                --path_save "experiments_swin/seed${seed}"
         done
-        wait
     ) &
     
     wait
     echo "Parallel training complete."
 
 else
-    echo "Running seeds in parallel (Single GPU detected)..."
+    echo "Running seeds sequentially (Single GPU detected)..."
     
     # UNet
     for seed in 1 2 3; do
@@ -114,9 +113,8 @@ else
             --path_train_gts "$TRAIN_GTS" \
             --path_val_data "$VAL_DATA" \
             --path_val_gts "$VAL_GTS" \
-            --path_save "experiments_unet/seed${seed}" &
+            --path_save "experiments_unet/seed${seed}"
     done
-    wait
 
     # Swin
     for seed in 1 2 3; do
@@ -129,9 +127,8 @@ else
             --path_train_gts "$TRAIN_GTS" \
             --path_val_data "$VAL_DATA" \
             --path_val_gts "$VAL_GTS" \
-            --path_save "experiments_swin/seed${seed}" &
+            --path_save "experiments_swin/seed${seed}"
     done
-    wait
     
     echo "Training complete."
 fi
