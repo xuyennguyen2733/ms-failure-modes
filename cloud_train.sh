@@ -104,3 +104,9 @@ else
     
     echo "Sequential training complete."
 fi
+
+# Stop the pod to avoid extra charges (RunPod specific)
+if [ -n "$RUNPOD_POD_ID" ]; then
+    echo "RunPod environment detected. Stopping pod $RUNPOD_POD_ID..."
+    runpodctl stop pod "$RUNPOD_POD_ID"
+fi
