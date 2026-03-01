@@ -1,9 +1,9 @@
 @echo off
 REM Update these paths to match your local setup
 REM Using dev_in (validation set) for evaluation by default
-set "TEST_DATA=data\dev_in\flair"
-set "TEST_GTS=data\dev_in\gt"
-set "TEST_BM=data\dev_in\fg_mask"
+set "TEST_DATA=data\eval_in\flair"
+set "TEST_GTS=data\eval_in\gt"
+set "TEST_BM=data\eval_in\fg_mask"
 set "MODEL_DIR=experiments_swin"
 
 echo ----------------------------------------------------------------
