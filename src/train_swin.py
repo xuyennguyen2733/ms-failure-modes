@@ -104,7 +104,7 @@ def main(args):
     ''' Training loop '''
     for epoch in range(epoch_num):
         print("-" * 10)
-        print(f"epoch {epoch + 1}/{epoch_num}")
+        print(f"[Swin] epoch {epoch + 1}/{epoch_num}")
         model.train()
         epoch_loss = 0
         step = 0
@@ -174,8 +174,8 @@ def main(args):
                     best_metric = metric
                     best_metric_epoch = epoch + 1
                     torch.save(model.state_dict(), os.path.join(path_save, "Best_model_finetuning.pth"))
-                    print("saved new best metric model")
-                print(f"current epoch: {epoch + 1} current mean dice: {metric:.4f}"
+                    print("[Swin] saved new best metric model")
+                print(f"[Swin] current epoch: {epoch + 1} current mean dice: {metric:.4f}"
                                     f"\nbest mean dice: {best_metric:.4f} at epoch: {best_metric_epoch}"
                                     )
  
