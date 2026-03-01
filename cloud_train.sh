@@ -47,8 +47,9 @@ if [ "$GPU_COUNT" -ge 2 ]; then
                 --path_train_gts "$TRAIN_GTS" \
                 --path_val_data "$VAL_DATA" \
                 --path_val_gts "$VAL_GTS" \
-                --path_save "experiments_unet/seed${seed}" || exit 1
+                --path_save "experiments_unet/seed${seed}" &
         done
+        wait
     ) &
     
     # Run Swin on GPU 1
@@ -64,15 +65,16 @@ if [ "$GPU_COUNT" -ge 2 ]; then
                 --path_train_gts "$TRAIN_GTS" \
                 --path_val_data "$VAL_DATA" \
                 --path_val_gts "$VAL_GTS" \
-                --path_save "experiments_swin/seed${seed}" || exit 1
+                --path_save "experiments_swin/seed${seed}" &
         done
+        wait
     ) &
     
     wait
     echo "Parallel training complete."
 
 else
-    echo "Running sequentially (Single GPU detected)..."
+    echo "Running seeds in parallel (Single GPU detected)..."
     
     # UNet
     for seed in 1 2 3; do
@@ -85,8 +87,9 @@ else
             --path_train_gts "$TRAIN_GTS" \
             --path_val_data "$VAL_DATA" \
             --path_val_gts "$VAL_GTS" \
-            --path_save "experiments_unet/seed${seed}" || exit 1
+            --path_save "experiments_unet/seed${seed}" &
     done
+    wait
 
     # Swin
     for seed in 1 2 3; do
@@ -99,10 +102,11 @@ else
             --path_train_gts "$TRAIN_GTS" \
             --path_val_data "$VAL_DATA" \
             --path_val_gts "$VAL_GTS" \
-            --path_save "experiments_swin/seed${seed}" || exit 1
+            --path_save "experiments_swin/seed${seed}" &
     done
+    wait
     
-    echo "Sequential training complete."
+    echo "Training complete."
 fi
 
 # Stop the pod to avoid extra charges (RunPod specific)
