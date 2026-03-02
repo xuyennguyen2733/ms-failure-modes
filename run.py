@@ -55,9 +55,9 @@ def run_training(epochs, seeds=[1, 2, 3]):
 def run_evaluation(seeds=[1, 2, 3]):
     print("\n>>> [3/4] Starting Evaluation...")
     
-    test_data = os.path.join("data", "dev_in", "flair")
-    test_gts = os.path.join("data", "dev_in", "gt")
-    test_bm = os.path.join("data", "dev_in", "fg_mask")
+    test_data = os.path.join("data", "eval_in", "flair")
+    test_gts = os.path.join("data", "eval_in", "gt")
+    test_bm = os.path.join("data", "eval_in", "fg_mask")
     
     evals = [
         ("UNet", "src/test_unet.py", "experiments_unet"),
