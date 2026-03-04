@@ -17,27 +17,27 @@ import seaborn as sns; sns.set_theme()
 from sklearn import metrics
 
 parser = argparse.ArgumentParser(description='Get all command line arguments.')
-# model
+
 parser.add_argument('--num_models', type=int, default=3,
                     help='Number of models in ensemble')
 parser.add_argument('--path_model', type=str, default='',
                     help='Specify the dir to al the trained models')
-# data
+
 parser.add_argument('--path_data', type=str, required=True,
                     help='Specify the path to the directory with FLAIR images')
 parser.add_argument('--path_gts', type=str, required=True,
                     help='Specify the path to the directory with ground truth binary masks')
 parser.add_argument('--path_bm', type=str, required=True,
                     help='Specify the path to the directory with brain masks')
-# parallel computation
+
 parser.add_argument('--num_workers', type=int, default=1,
                     help='Number of workers to preprocess images')
 parser.add_argument('--n_jobs', type=int, default=1,
                     help='Number of parallel workers for F1 score computation')
-# hyperparameters
+
 parser.add_argument('--threshold', type=float, default=0.35,
                     help='Probability threshold')
-# save dir
+
 parser.add_argument('--path_save', type=str, required=True,
                     help='Specify the path to the directory where retention \
                     curves will be saved')
@@ -87,8 +87,6 @@ def main(args):
     roi_size = (96, 96, 96)
     sw_batch_size = 4
 
-    # Significant class imbalance means it is important to use logspacing between values
-    # so that it is more granular for the higher retention fractions
     fracs_retained = np.log(np.arange(200 + 1)[1:])
     fracs_retained /= np.amax(fracs_retained)
 
@@ -103,7 +101,7 @@ def main(args):
                     batch_data["label"].cpu().numpy(),
                     batch_data["brain_mask"].cpu().numpy()
                 )
-                # get ensemble predictions
+                
                 all_outputs = []
                 for model in models:
                     outputs = sliding_window_inference(inputs, roi_size,
@@ -114,7 +112,6 @@ def main(args):
                     all_outputs.append(outputs)
                 all_outputs = np.asarray(all_outputs)
 
-                # obtain binary segmentation mask
                 seg = np.mean(all_outputs, axis=0)
                 seg[seg >= th] = 1
                 seg[seg < th] = 0
@@ -124,13 +121,11 @@ def main(args):
                 gt = np.squeeze(gt)
                 brain_mask = np.squeeze(brain_mask)
 
-                # compute reverse mutual information uncertainty map
                 uncs_map = ensemble_uncertainties_classification(np.concatenate(
                     (np.expand_dims(all_outputs, axis=-1),
                      np.expand_dims(1. - all_outputs, axis=-1)),
                     axis=-1))['reverse_mutual_information']
 
-                # compute metrics
                 ndsc_rc += [ndsc_retention_curve(ground_truth=gt[brain_mask == 1].flatten(),
                                                  predictions=seg[brain_mask == 1].flatten(),
                                                  uncertainties=uncs_map[brain_mask == 1].flatten(),
@@ -151,7 +146,6 @@ def main(args):
     plt.clf()
 
 
-# %%
 if __name__ == "__main__":
     args = parser.parse_args()
     main(args)

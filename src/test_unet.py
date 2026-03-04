@@ -16,24 +16,24 @@ from metrics import dice_norm_metric, lesion_f1_score, ndsc_aac_metric
 from uncertainty import ensemble_uncertainties_classification
 
 parser = argparse.ArgumentParser(description='Get all command line arguments.')
-# model
+
 parser.add_argument('--seeds', nargs='+', type=int, default=[1, 2, 3],
                     help='List of seeds for ensemble')
 parser.add_argument('--path_model', type=str, default='',
                     help='Specify the dir to al the trained models')
-# data
+
 parser.add_argument('--path_data', type=str, required=True,
                     help='Specify the path to the directory with FLAIR images')
 parser.add_argument('--path_gts', type=str, required=True,
                     help='Specify the path to the directory with ground truth binary masks')
 parser.add_argument('--path_bm', type=str, required=True,
                     help='Specify the path to the directory with brain masks')
-# parallel computation
+
 parser.add_argument('--num_workers', type=int, default=1,
                     help='Number of workers to preprocess images')
 parser.add_argument('--n_jobs', type=int, default=1,
                     help='Number of parallel workers for F1 score computation')
-# hyperparameters
+
 parser.add_argument('--threshold', type=float, default=0.35,
                     help='Probability threshold')
 
@@ -95,7 +95,6 @@ def main(args):
                     batch_data["brain_mask"].cpu().numpy()
                 )
 
-                # get ensemble predictions
                 all_outputs = []
                 for model in models:
                     outputs = sliding_window_inference(inputs, roi_size,
@@ -106,7 +105,6 @@ def main(args):
                     all_outputs.append(outputs)
                 all_outputs = np.asarray(all_outputs)
 
-                # obtain binary segmentation mask
                 seg = np.mean(all_outputs, axis=0)
                 seg[seg >= th] = 1
                 seg[seg < th] = 0
@@ -116,7 +114,6 @@ def main(args):
                 gt = np.squeeze(gt)
                 brain_mask = np.squeeze(brain_mask)
 
-                # compute uncertainty maps
                 uncs_dict = ensemble_uncertainties_classification(np.concatenate(
                     (np.expand_dims(all_outputs, axis=-1),
                      np.expand_dims(1. - all_outputs, axis=-1)),
@@ -124,7 +121,6 @@ def main(args):
                 uncs_map = uncs_dict['reverse_mutual_information']
                 pred_entropy = uncs_dict['entropy_of_expected']
 
-                # compute metrics
                 ndsc += [dice_norm_metric(ground_truth=gt, predictions=seg)]
                 f1 += [lesion_f1_score(ground_truth=gt,
                                        predictions=seg,
@@ -134,13 +130,8 @@ def main(args):
                                              predictions=seg[brain_mask == 1].flatten(),
                                              uncertainties=uncs_map[brain_mask == 1].flatten(),
                                              parallel_backend=parallel_backend)]
-                
-                # Compute mean predictive entropy in brain mask
-                mean_entropy += [np.mean(pred_entropy[brain_mask == 1])]
 
-                # for nervous people
-                if count % 10 == 0:
-                    print(f"Processed {count}/{len(val_loader)}")
+                mean_entropy += [np.mean(pred_entropy[brain_mask == 1])]
 
     ndsc = np.asarray(ndsc) * 100.
     f1 = np.asarray(f1) * 100.
@@ -152,8 +143,6 @@ def main(args):
     print(f"nDSC R-AUC:\t{np.mean(ndsc_aac):.4f} +- {np.std(ndsc_aac):.4f}")
     print(f"Predictive Entropy:\t{np.mean(mean_entropy):.4f} +- {np.std(mean_entropy):.4f}")
 
-
-# %%
 if __name__ == "__main__":
     args = parser.parse_args()
     main(args)

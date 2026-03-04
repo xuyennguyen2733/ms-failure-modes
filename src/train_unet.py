@@ -16,14 +16,14 @@ from metrics import dice_metric
 from data_load import get_train_dataloader, get_val_dataloader
 
 parser = argparse.ArgumentParser(description='Get all command line arguments.')
-# trainining
+
 parser.add_argument('--learning_rate', type=float, default=1e-5, 
                     help='Specify the initial learning rate')
 parser.add_argument('--n_epochs', type=int, default=300, 
                     help='Specify the number of epochs to train for')
-# initialisation                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       
+                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     
 parser.add_argument('--seed', type=int, default=1, help='Specify the global random seed')
-# data
+
 parser.add_argument('--path_train_data', type=str, required=True, 
                     help='Specify the path to the training data files directory')
 parser.add_argument('--path_train_gts', type=str, required=True, 
@@ -34,7 +34,7 @@ parser.add_argument('--path_val_gts', type=str, required=True,
                     help='Specify the path to the validation gts files directory')
 parser.add_argument('--num_workers', type=int, default=10, 
                     help='Number of workers')
-# logging
+
 parser.add_argument('--path_save', type=str, default='', 
                     help='Specify the path to the trained model will be saved')
 parser.add_argument('--val_interval', type=int, default=5, 
@@ -178,7 +178,6 @@ def main(args):
                                     )
  
           
-#%%
 if __name__ == "__main__":
     args = parser.parse_args()
     main(args)
