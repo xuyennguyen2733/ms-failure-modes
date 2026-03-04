@@ -31,7 +31,7 @@ parser.add_argument('--path_gts', type=str, required=True,
                     help='Path to ground truth masks')
 parser.add_argument('--path_bm', type=str, required=True,
                     help='Path to brain masks')
-parser.add_argument('--num_workers', type=int, default=4,
+parser.add_argument('--num_workers', type=int, default=1,
                     help='Number of workers')
 # Hyperparameters
 parser.add_argument('--threshold', type=float, default=0.35,

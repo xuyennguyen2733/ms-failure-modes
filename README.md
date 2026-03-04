@@ -78,7 +78,7 @@ data/
 ### How to Train and Test
 
 ```bash
-python run.py --epochs 300 --seeds 1 2 3
+python run.py --epochs 300 --seeds 1 2 3 --num_workers 10
 # Other optional flags: --skip_install --skip_train --skip_eval --skip_audit
 ```
 

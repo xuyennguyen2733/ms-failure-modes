@@ -32,7 +32,7 @@ parser.add_argument('--path_val_data', type=str, required=True,
                     help='Specify the path to the validation data files directory')
 parser.add_argument('--path_val_gts', type=str, required=True, 
                     help='Specify the path to the validation gts files directory')
-parser.add_argument('--num_workers', type=int, default=10, 
+parser.add_argument('--num_workers', type=int, default=1, 
                     help='Number of workers')
 
 parser.add_argument('--path_save', type=str, default='', 

@@ -4,15 +4,15 @@ import subprocess
 import sys
 
 def install_requirements():
-    print("\n>>> [1/4] Installing dependencies from requirements.txt...")
+    print("\n>>> [1/5] Installing dependencies from requirements.txt...")
     try:
         subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", "requirements.txt"])
     except subprocess.CalledProcessError as e:
         print(f"Error installing requirements: {e}")
         sys.exit(1)
 
-def run_training(epochs, seeds=[1, 2, 3]):
-    print(f"\n>>> [2/4] Starting Training (Epochs: {epochs})...")
+def run_training(epochs, num_workers, seeds=[1, 2, 3]):
+    print(f"\n>>> [2/5] Starting Training (Epochs: {epochs})...")
     
     # Define paths relative to current working directory
     train_data = os.path.join("data", "train", "flair")
@@ -43,7 +43,8 @@ def run_training(epochs, seeds=[1, 2, 3]):
                 "--path_train_gts", train_gts,
                 "--path_val_data", val_data,
                 "--path_val_gts", val_gts,
-                "--path_save", save_path
+                "--path_save", save_path,
+                "--num_workers", str(num_workers)
             ]
             
             try:
@@ -52,12 +53,12 @@ def run_training(epochs, seeds=[1, 2, 3]):
                 print(f"Training failed for {model_name} seed {seed}: {e}")
                 sys.exit(1)
 
-def run_evaluation(seeds=[1, 2, 3]):
-    print("\n>>> [3/4] Starting Evaluation...")
+def run_evaluation(num_workers, seeds=[1, 2, 3]):
+    print("\n>>> [3/5] Starting Evaluation...")
     
-    test_data = os.path.join("data", "eval_in", "flair")
-    test_gts = os.path.join("data", "eval_in", "gt")
-    test_bm = os.path.join("data", "eval_in", "fg_mask")
+    test_data = os.path.join("data", "dev_out", "flair")
+    test_gts = os.path.join("data", "dev_out", "gt")
+    test_bm = os.path.join("data", "dev_out", "fg_mask")
     
     evals = [
         ("UNet", "src/test_unet.py", "experiments_unet"),
@@ -73,6 +74,7 @@ def run_evaluation(seeds=[1, 2, 3]):
             "--path_gts", test_gts,
             "--path_bm", test_bm,
             "--threshold", "0.35",
+            "--num_workers", str(num_workers),
             "--seeds"
         ] + [str(s) for s in seeds]
         try:
@@ -81,8 +83,8 @@ def run_evaluation(seeds=[1, 2, 3]):
             print(f"Evaluation failed for {model_name}: {e}")
             sys.exit(1)
 
-def run_inference(seeds=[1, 2, 3]):
-    print("\n>>> [3.5/4] Starting Inference (Generating 3D Segmentations)...")
+def run_inference(num_workers, seeds=[1, 2, 3]):
+    print("\n>>> [4/5] Starting Inference (Generating 3D Segmentations)...")
     
     test_data = os.path.join("data", "eval_in", "flair")
     test_bm = os.path.join("data", "eval_in", "fg_mask")
@@ -102,7 +104,8 @@ def run_inference(seeds=[1, 2, 3]):
             "--path_data", test_data,
             "--path_bm", test_bm,
             "--path_pred", output_dir,
-            "--num_models", str(len(seeds))
+            "--num_models", str(len(seeds)),
+            "--num_workers", str(num_workers)
         ]
         try:
             subprocess.check_call(cmd)
@@ -110,8 +113,8 @@ def run_inference(seeds=[1, 2, 3]):
             print(f"Inference failed for {model_name}: {e}")
             sys.exit(1)
 
-def run_audit():
-    print("\n>>> [4/4] Starting Failure Mode Audit...")
+def run_audit(num_workers):
+    print("\n>>> [5/5] Starting Failure Mode Audit...")
     
     audit_data = os.path.join("data", "dev_out", "flair")
     audit_gts = os.path.join("data", "dev_out", "gt")
@@ -123,7 +126,8 @@ def run_audit():
         "--path_swin", "experiments_swin",
         "--path_data", audit_data,
         "--path_gts", audit_gts,
-        "--path_bm", audit_bm
+        "--path_bm", audit_bm,
+        "--num_workers", str(num_workers)
     ]
     try:
         subprocess.check_call(cmd)
@@ -134,6 +138,7 @@ def run_audit():
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run full MS Lesion Segmentation pipeline.")
     parser.add_argument("--epochs", type=int, default=1, help="Number of training epochs (default: 100)")
+    parser.add_argument("--num_workers", type=int, default=1, help="Number of workers for data loading (default: 0 for laptop safety)")
     parser.add_argument("--seeds", nargs="+", type=int, default=[1, 2, 3], help="List of seeds to train (default: 1 2 3)")
     parser.add_argument("--skip_install", action="store_true", help="Skip dependency installation")
     parser.add_argument("--skip_train", action="store_true", help="Skip training phase")
@@ -147,13 +152,13 @@ if __name__ == "__main__":
         install_requirements()
     
     if not args.skip_train:
-        run_training(args.epochs, seeds=args.seeds)
+        run_training(args.epochs, args.num_workers, seeds=args.seeds)
         
     if not args.skip_eval:
-        run_evaluation(seeds=args.seeds)
+        run_evaluation(args.num_workers, seeds=args.seeds)
 
     if not args.skip_inference:
-        run_inference(seeds=args.seeds)
+        run_inference(args.num_workers, seeds=args.seeds)
         
     if not args.skip_audit:
-        run_audit()
+        run_audit(args.num_workers)

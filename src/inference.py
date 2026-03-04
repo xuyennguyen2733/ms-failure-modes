@@ -18,25 +18,25 @@ from data_load import remove_connected_components, get_flair_dataloader
 from uncertainty import ensemble_uncertainties_classification
 
 parser = argparse.ArgumentParser(description='Get all command line arguments.')
-# save options
+
 parser.add_argument('--path_pred', type=str, required=True,
                     help='Specify the path to the directory to store predictions')
-# model
+
 parser.add_argument('--num_models', type=int, default=3,
                     help='Number of models in ensemble')
 parser.add_argument('--model_name', type=str, default='UNet', choices=['UNet', 'SwinUNETR'],
                     help='Model architecture to use')
 parser.add_argument('--path_model', type=str, default='',
                     help='Specify the dir to al the trained models')
-# data
+
 parser.add_argument('--path_data', type=str, required=True,
                     help='Specify the path to the directory with FLAIR images')
 parser.add_argument('--path_bm', type=str, required=True,
                     help='Specify the path to the directory with brain masks')
-# parallel computation
-parser.add_argument('--num_workers', type=int, default=10,
+
+parser.add_argument('--num_workers', type=int, default=1,
                     help='Number of workers to preprocess images')
-# hyperparameters
+
 parser.add_argument('--threshold', type=float, default=0.35,
                     help='Probability threshold')
 
