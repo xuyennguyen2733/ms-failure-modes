@@ -11,7 +11,7 @@ import os
 import re
 import torch
 from monai.inferers import sliding_window_inference
-from monai.networks.nets import UNet
+from monai.networks.nets import UNet, SwinUNETR
 from monai.data import write_nifti
 import numpy as np
 from data_load import remove_connected_components, get_flair_dataloader
@@ -24,6 +24,8 @@ parser.add_argument('--path_pred', type=str, required=True,
 # model
 parser.add_argument('--num_models', type=int, default=3,
                     help='Number of models in ensemble')
+parser.add_argument('--model_name', type=str, default='UNet', choices=['UNet', 'SwinUNETR'],
+                    help='Model architecture to use')
 parser.add_argument('--path_model', type=str, default='',
                     help='Specify the dir to al the trained models')
 # data
@@ -62,14 +64,24 @@ def main(args):
     K = args.num_models
     models = []
     for i in range(K):
-        models.append(UNet(
-            spatial_dims=3,
-            in_channels=1,
-            out_channels=2,
-            channels=(32, 64, 128, 256, 512),
-            strides=(2, 2, 2, 2),
-            num_res_units=0).to(device)
-                      )
+        if args.model_name == 'SwinUNETR':
+            models.append(SwinUNETR(
+                img_size=(96, 96, 96),
+                in_channels=1,
+                out_channels=2,
+                feature_size=48,
+                use_checkpoint=False,
+                spatial_dims=3
+            ).to(device))
+        else:
+            models.append(UNet(
+                spatial_dims=3,
+                in_channels=1,
+                out_channels=2,
+                channels=(32, 64, 128, 256, 512),
+                strides=(2, 2, 2, 2),
+                num_res_units=0).to(device)
+                          )
 
     for i, model in enumerate(models):
         model.load_state_dict(torch.load(os.path.join(args.path_model,

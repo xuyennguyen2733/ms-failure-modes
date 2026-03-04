@@ -8,6 +8,8 @@ Performs:
 import argparse
 import os
 import torch
+import matplotlib.pyplot as plt
+import seaborn as sns
 from monai.inferers import sliding_window_inference
 from monai.networks.nets import UNet, SwinUNETR
 import numpy as np
@@ -34,6 +36,8 @@ parser.add_argument('--num_workers', type=int, default=4,
 # Hyperparameters
 parser.add_argument('--threshold', type=float, default=0.35,
                     help='Probability threshold')
+parser.add_argument('--path_save', type=str, default='visualization',
+                    help='Path to save audit plots')
 
 
 def get_default_device():
@@ -140,7 +144,6 @@ def main(args):
             seg_swin = process_seg(pred_swin_prob)
             
             # --- Audit 1: Spatial Overlap of False Positives ---
-            # FP = Predicted 1 BUT Ground Truth 0 (masked by brain mask)
             fp_unet_mask = (seg_unet == 1) & (gt == 0) & (bm == 1)
             fp_swin_mask = (seg_swin == 1) & (gt == 0) & (bm == 1)
             
@@ -150,14 +153,12 @@ def main(args):
             if union > 0:
                 fp_ious.append(intersection / union)
             else:
-                fp_ious.append(np.nan) # No FPs for either model
+                fp_ious.append(np.nan) 
 
             # --- Audit 2: Uncertainty Calibration at Failure Sites ---
-            # FN = Predicted 0 BUT Ground Truth 1
             fn_unet_mask = (seg_unet == 0) & (gt == 1) & (bm == 1)
             fn_swin_mask = (seg_swin == 0) & (gt == 1) & (bm == 1)
             
-            # Extract entropies at these locations
             if fp_unet_mask.sum() > 0: unet_fp_entropy.append(np.mean(ent_unet[fp_unet_mask]))
             if fp_swin_mask.sum() > 0: swin_fp_entropy.append(np.mean(ent_swin[fp_swin_mask]))
             
@@ -167,22 +168,59 @@ def main(args):
             if (count + 1) % 5 == 0:
                 print(f"Processed {count + 1}/{len(val_loader)}")
 
-    # --- Reporting ---
     print("\n" + "="*40)
     print("AUDIT RESULTS")
     print("="*40)
     
-    # 1. Spatial Overlap
     valid_ious = [x for x in fp_ious if not np.isnan(x)]
     avg_fp_iou = np.mean(valid_ious) if valid_ious else 0.0
     print(f"1. Spatial Overlap Audit (FP IoU): {avg_fp_iou:.4f}")
     print(f"   (Lower IoU = Distinct Failure Modes)")
 
-    # 2. Uncertainty Calibration
     print("\n2. Uncertainty Calibration Audit (Mean Predictive Entropy):")
     print(f"   UNet FP Entropy: {np.mean(unet_fp_entropy):.4f} vs Swin FP Entropy: {np.mean(swin_fp_entropy):.4f}")
     print(f"   UNet FN Entropy: {np.mean(unet_fn_entropy):.4f} vs Swin FN Entropy: {np.mean(swin_fn_entropy):.4f}")
     print("   (Higher Entropy = Model is 'uncertain' about its error)")
+
+    if args.path_save:
+        os.makedirs(args.path_save, exist_ok=True)
+        sns.set_theme(style="whitegrid")
+        plt.figure(figsize=(10, 6))
+        
+        # Prepare data for boxplot
+        data = [unet_fp_entropy, swin_fp_entropy, unet_fn_entropy, swin_fn_entropy]
+        labels = ['UNet FP', 'Swin FP', 'UNet FN', 'Swin FN']
+        
+        # Filter out empty lists to avoid plotting errors
+        plot_data = []
+        plot_labels = []
+        for d, l in zip(data, labels):
+            if len(d) > 0:
+                plot_data.append(d)
+                plot_labels.append(l)
+        
+        if plot_data:
+            plt.boxplot(plot_data, labels=plot_labels, patch_artist=True)
+            plt.title('Uncertainty Calibration at Failure Sites')
+            plt.ylabel('Predictive Entropy')
+            
+            save_path = os.path.join(args.path_save, 'uncertainty_audit.png')
+            plt.savefig(save_path)
+            print(f"\nVisualization saved to: {save_path}")
+        else:
+            print("\nNo failure data available to plot.")
+
+        if valid_ious:
+            plt.figure(figsize=(10, 6))
+            sns.histplot(valid_ious, kde=True, bins=10, color='purple')
+            plt.title('Distribution of Spatial Overlap (IoU) of False Positives')
+            plt.xlabel('Intersection over Union (IoU)')
+            plt.ylabel('Frequency (Number of Subjects)')
+            plt.xlim(0, 1.0)
+            
+            save_path_iou = os.path.join(args.path_save, 'spatial_overlap_audit.png')
+            plt.savefig(save_path_iou)
+            print(f"Visualization saved to: {save_path_iou}")
 
 if __name__ == "__main__":
     args = parser.parse_args()

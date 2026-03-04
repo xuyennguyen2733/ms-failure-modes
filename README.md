@@ -6,7 +6,7 @@
 
 This project investigates the failure modes of deep learning models in medical image segmentation, specifically focusing on Multiple Sclerosis (MS) white matter lesions. It compares a **3D UNet** (representing a strong local structural assumption) against a **Swin UNETR** (representing a relaxed, global context assumption) to understand how architectural biases influence performance under distribution shifts.
 
-## Experimental Setup
+## Experimental Components
 
 ### Data
 
@@ -27,16 +27,9 @@ This project investigates the failure modes of deep learning models in medical i
 
 ---
 
-## How to Run
+## Setup
 
-### 0. Run with `run.py`
-
-```bash
-python run.py --epochs 300 --seeds 1 2 3
-# Optional flags: --skip_install --skip_train --skip_eval --skip_audit
-```
-
-### 1. Requirements
+### Requirements
 
 Install the necessary dependencies:
 
@@ -44,7 +37,7 @@ Install the necessary dependencies:
 pip install -r requirements.txt
 ```
 
-### 2. Data Setup
+### Data Structure
 
 Ensure your data is organized as follows (see `DATA_README.txt` for details):
 
@@ -66,65 +59,7 @@ data/
 └──...
 ```
 
-### 3. Training
-
-#### Option A: Run in the Cloud (Linux/RunPod)
-
-Use the provided shell script to train both models (UNet and Swin UNETR) sequentially or in parallel depending on GPU availability.
-
-```bash
-# Run for default 300 epochs
-bash cloud_train.sh
-
-# Or specify number of epochs (e.g., 100)
-bash cloud_train.sh 100
-```
-
-_Note: This script automatically stop the pod once training is completed to save costs._
-
-#### Option B: Run Locally (Windows)
-
-Use the batch scripts to train the models separately.
-
-**Train 3D UNet:**
-
-```cmd
-train_unet.bat
-```
-
-**Train Swin UNETR:**
-
-```cmd
-train_swin.bat
-```
-
-### 4. Evaluation
-
-Once training is complete, use the test scripts to generate metrics on the validation/test set.
-
-**Evaluate 3D UNet:**
-
-```cmd
-eval_unet.bat
-```
-
-**Evaluate Swin UNETR:**
-
-```cmd
-eval_swin.bat
-```
-
-### 5. Failure Mode Audits
-
-To run the specific audits (Spatial Overlap and Uncertainty Calibration) comparing the two trained ensembles:
-
-```cmd
-audit.bat
-```
-
----
-
-## File Structure
+### Files and Folders
 
 - `data/`: The data used to train and evaluate the models.
 - `src/`: Source code for models, training, and testing.
@@ -138,8 +73,14 @@ audit.bat
   - `metrics.py`: Implementation of evaluation metrics (Dice, nDSC, F1, etc.).
   - `retention_curves.py`: Script for generating retention curve plots.
   - `uncertainty.py`: Implementation of uncertainty measures.
-- `cloud_train.sh`: Master script for cloud training.
-- `*.bat`: Helper scripts for running on Windows.
+  - `run.py`: Run all the scripts to train, evaluate, and audit models.
+
+### How to Train and Test
+
+```bash
+python run.py --epochs 300 --seeds 1 2 3
+# Other optional flags: --skip_install --skip_train --skip_eval --skip_audit
+```
 
 ---
 

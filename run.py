@@ -81,6 +81,35 @@ def run_evaluation(seeds=[1, 2, 3]):
             print(f"Evaluation failed for {model_name}: {e}")
             sys.exit(1)
 
+def run_inference(seeds=[1, 2, 3]):
+    print("\n>>> [3.5/4] Starting Inference (Generating 3D Segmentations)...")
+    
+    test_data = os.path.join("data", "eval_in", "flair")
+    test_bm = os.path.join("data", "eval_in", "fg_mask")
+    
+    # Configs: (Model Name, Model Dir, Output Dir)
+    configs = [
+        ("UNet", "experiments_unet", "predictions_unet"),
+        ("SwinUNETR", "experiments_swin", "predictions_swin")
+    ]
+
+    for model_name, model_dir, output_dir in configs:
+        print(f"--- Generating Segmentations for {model_name} ---")
+        cmd = [
+            sys.executable, "src/inference.py",
+            "--model_name", model_name,
+            "--path_model", model_dir,
+            "--path_data", test_data,
+            "--path_bm", test_bm,
+            "--path_pred", output_dir,
+            "--num_models", str(len(seeds))
+        ]
+        try:
+            subprocess.check_call(cmd)
+        except subprocess.CalledProcessError as e:
+            print(f"Inference failed for {model_name}: {e}")
+            sys.exit(1)
+
 def run_audit():
     print("\n>>> [4/4] Starting Failure Mode Audit...")
     
@@ -109,6 +138,7 @@ if __name__ == "__main__":
     parser.add_argument("--skip_install", action="store_true", help="Skip dependency installation")
     parser.add_argument("--skip_train", action="store_true", help="Skip training phase")
     parser.add_argument("--skip_eval", action="store_true", help="Skip evaluation phase")
+    parser.add_argument("--skip_inference", action="store_true", help="Skip inference phase")
     parser.add_argument("--skip_audit", action="store_true", help="Skip audit phase")
     
     args = parser.parse_args()
@@ -121,6 +151,9 @@ if __name__ == "__main__":
         
     if not args.skip_eval:
         run_evaluation(seeds=args.seeds)
+
+    if not args.skip_inference:
+        run_inference(seeds=args.seeds)
         
     if not args.skip_audit:
         run_audit()
