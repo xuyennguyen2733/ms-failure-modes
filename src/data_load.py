@@ -10,7 +10,9 @@ from monai.transforms import (
     AddChanneld, Compose, LoadImaged, RandCropByPosNegLabeld,
     Spacingd, ToTensord, NormalizeIntensityd, RandFlipd,
     RandRotate90d, RandShiftIntensityd, RandAffined, RandSpatialCropd,
-    RandScaleIntensityd)
+    RandScaleIntensityd, RandBiasFieldd, RandAdjustContrastd,
+    RandHistogramShiftd, RandGaussianNoised, RandGaussianSmoothd,
+    RandGibbsNoised)
 from scipy import ndimage
 
 
@@ -27,9 +29,21 @@ def get_train_transforms():
         [
             LoadImaged(keys=["image", "label"]),
             AddChanneld(keys=["image", "label"]),
+            # --- Acquisition / scanner-shift simulators (image-only, pre-normalize) ---
+            # Applied to raw intensities to mimic cross-scanner variability
+            # (bias fields, protocol-driven contrast, nonlinear intensity remap).
+            RandBiasFieldd(keys="image", coeff_range=(0.0, 0.1), degree=3, prob=0.3),
+            RandAdjustContrastd(keys="image", gamma=(0.7, 1.5), prob=0.3),
+            RandHistogramShiftd(keys="image", num_control_points=10, prob=0.2),
             NormalizeIntensityd(keys=["image"], nonzero=True),
+            # --- Post-normalize intensity perturbations ---
             RandShiftIntensityd(keys="image", offsets=0.1, prob=1.0),
             RandScaleIntensityd(keys="image", factors=0.1, prob=1.0),
+            RandGaussianNoised(keys="image", mean=0.0, std=0.05, prob=0.2),
+            RandGaussianSmoothd(keys="image",
+                                sigma_x=(0.5, 1.0), sigma_y=(0.5, 1.0), sigma_z=(0.5, 1.0),
+                                prob=0.2),
+            RandGibbsNoised(keys="image", alpha=(0.0, 0.5), prob=0.2),
             RandCropByPosNegLabeld(keys=["image", "label"],
                                    label_key="label", image_key="image",
                                    spatial_size=(128, 128, 128), num_samples=32,

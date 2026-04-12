@@ -1,3 +1,7 @@
+#!/bin/bash
+#chmod +x run.py
+#apt update -y && apt install -y python3.9 python3.9-venv
+
 import argparse
 import os
 import subprocess

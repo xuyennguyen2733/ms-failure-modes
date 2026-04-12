@@ -106,10 +106,12 @@ def main(args):
         model.train()
         epoch_loss = 0
         step = 0
+        n_iters = 0
         for batch_data in train_loader:
             n_samples = batch_data["image"].size(0)
             for m in range(0,batch_data["image"].size(0), 2):
                 step += 2
+                n_iters += 1
                 inputs, labels = (
                     batch_data["image"][m:(m+2)].to(device),
                     batch_data["label"][m:(m+2)].type(torch.LongTensor).to(device))
@@ -134,50 +136,62 @@ def main(args):
                     step_print = int(step/2)
                     print(f"[UNET] {step_print}/{(len(train_loader)*n_samples) // (train_loader.batch_size*2)}, train_loss: {loss.item():.4f}")
 
-        epoch_loss /= step_print
+        epoch_loss /= max(n_iters, 1)
         epoch_loss_values.append(epoch_loss)
         print(f"[UNET] epoch {epoch + 1} average loss: {epoch_loss:.4f}")
         
         ''' Validation '''
         if (epoch + 1) % val_interval == 0:
-            model.eval()
-            with torch.no_grad():
-                metric_sum = 0.0
-                metric_count = 0
-                for val_data in val_loader:
-                    val_inputs, val_labels = (
-                        val_data["image"].to(device),
-                        val_data["label"].to(device)
-                        )
-                    
-                    val_outputs = sliding_window_inference(val_inputs, roi_size, 
-                                                           sw_batch_size, 
-                                                           model, mode='gaussian')
-                   
-                    gt = np.squeeze(val_labels.cpu().numpy())
-                    
-                    seg = act(val_outputs).cpu().numpy()
-                    seg= np.squeeze(seg[0,1])
-                    seg[seg >= thresh] = 1
-                    seg[seg < thresh] = 0
-                    
-                    value = dice_metric(ground_truth=gt.flatten(), predictions=seg.flatten())
+            metric = run_validation(model, val_loader, device, roi_size, sw_batch_size, act, thresh)
+            metric_values.append(metric)
+            if metric > best_metric:
+                best_metric = metric
+                best_metric_epoch = epoch + 1
+                torch.save(model.state_dict(), os.path.join(path_save, "Best_model_finetuning.pth"))
+                print("[UNET] saved new best metric model")
+            print(f"[UNET] current epoch: {epoch + 1} current mean dice: {metric:.4f}"
+                                f"\nbest mean dice: {best_metric:.4f} at epoch: {best_metric_epoch}"
+                                )
 
-                    metric_count += 1
-                    metric_sum += value.sum().item()
-                
-                metric = metric_sum / metric_count
-                metric_values.append(metric)
-                if metric > best_metric:
-                    best_metric = metric
-                    best_metric_epoch = epoch + 1
-                    torch.save(model.state_dict(), os.path.join(path_save, "Best_model_finetuning.pth"))
-                    print("[UNET] saved new best metric model")
-                print(f"[UNET] current epoch: {epoch + 1} current mean dice: {metric:.4f}"
-                                    f"\nbest mean dice: {best_metric:.4f} at epoch: {best_metric_epoch}"
-                                    )
- 
-          
+    ''' Final save: guarantee a checkpoint exists even if val_interval never triggered.
+        Still gated by the in-run best so we don't overwrite a better earlier save. '''
+    final_metric = run_validation(model, val_loader, device, roi_size, sw_batch_size, act, thresh)
+    print(f"[UNET] final-epoch validation mean dice: {final_metric:.4f}")
+    if final_metric > best_metric:
+        best_metric = final_metric
+        best_metric_epoch = epoch_num
+        torch.save(model.state_dict(), os.path.join(path_save, "Best_model_finetuning.pth"))
+        print(f"[UNET] final model saved as new best ({final_metric:.4f})")
+    else:
+        print(f"[UNET] final model NOT saved — in-run best {best_metric:.4f} "
+              f"at epoch {best_metric_epoch} >= final {final_metric:.4f}")
+
+
+def run_validation(model, val_loader, device, roi_size, sw_batch_size, act, thresh):
+    """Run one validation pass and return mean Dice."""
+    model.eval()
+    metric_sum = 0.0
+    metric_count = 0
+    with torch.no_grad():
+        for val_data in val_loader:
+            val_inputs, val_labels = (
+                val_data["image"].to(device),
+                val_data["label"].to(device)
+            )
+            val_outputs = sliding_window_inference(val_inputs, roi_size,
+                                                   sw_batch_size,
+                                                   model, mode='gaussian')
+            gt = np.squeeze(val_labels.cpu().numpy())
+            seg = act(val_outputs).cpu().numpy()
+            seg = np.squeeze(seg[0, 1])
+            seg[seg >= thresh] = 1
+            seg[seg < thresh] = 0
+            value = dice_metric(ground_truth=gt.flatten(), predictions=seg.flatten())
+            metric_count += 1
+            metric_sum += value.sum().item()
+    return metric_sum / max(metric_count, 1)
+
+
 if __name__ == "__main__":
     args = parser.parse_args()
     main(args)
