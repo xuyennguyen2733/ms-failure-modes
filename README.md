@@ -1,4 +1,4 @@
-# CS 7640 - Project Lego 2: MS Lesion Segmentation Failure Modes
+# CS 7640 - Project: MS Lesion Segmentation Failure Modes
 
 **Author:** Xuyen Nguyen (u1252970)
 
@@ -82,8 +82,35 @@ data/
 
 ```bash
 python run.py --epochs 300 --seeds 1 2 3 --num_workers 10
-# Other optional flags: --skip_install --skip_train --skip_eval --skip_audit
 ```
+
+#### Optional flags
+- `--models unet` or `--models swin` — restrict the pipeline to a single
+  backbone (defaults to both). The audit stage compares UNet vs Swin and is
+  automatically skipped when only one model is selected.
+- `--patch_sizes 64 96 128` — sweep cubic training/inference patch sizes (single
+  "locality" knob for the Lego-3 controlled comparison). Each value must be a
+  multiple of 32 for SwinUNETR. Defaults to `96`.
+- `--output_root <dir>` — parent directory for **all** generated artifacts
+  (`experiments_*`, `predictions_*`, `visualization/`). Defaults to the repo
+  root. On RunPod, set this to a single folder so every output can be fetched
+  with one download:
+  ```bash
+  python run.py --epochs 300 --seeds 1 2 3 --num_workers 10 \
+                --patch_sizes 64 96 128 --output_root download
+  # then, after training finishes:
+  tar czf all_outputs.tar.gz download/
+  ```
+- `--skip_install` `--skip_train` `--skip_eval` `--skip_inference` `--skip_audit`
+  — skip individual pipeline stages.
+- `--skip_comparison` — run the audit but skip the *secondary* cross-model
+  FP-overlap comparison (UNet vs Swin). The primary per-backbone uncertainty
+  audit still runs. Useful for the single-backbone locality study, where the
+  two-model comparison is only a secondary add-on.
+
+Each patch size produces its own tagged output directories
+(`experiments_unet_p64/`, `predictions_swin_p96/`, `visualization/p128/`, ...)
+so sweeps don't collide.
 
 ---
 

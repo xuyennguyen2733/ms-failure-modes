@@ -39,8 +39,11 @@ parser.add_argument('--path_save', type=str, default='',
                     help='Specify the path to the trained model will be saved')
 parser.add_argument('--val_interval', type=int, default=5, 
                     help='Validation every n-th epochs')
-parser.add_argument('--threshold', type=float, default=0.4, 
+parser.add_argument('--threshold', type=float, default=0.4,
                     help='Probability threshold')
+parser.add_argument('--patch_size', type=int, default=96,
+                    help='Cubic training patch size (P, P, P). Must be >0; recommended '
+                         'values {64, 96, 128}.')
 
 
 def get_default_device():
@@ -65,9 +68,10 @@ def main(args):
     path_save = args.path_save
     
     '''' Initialise dataloaders '''
-    train_loader = get_train_dataloader(flair_path=args.path_train_data, 
-                                        gts_path=args.path_train_gts, 
-                                        num_workers=args.num_workers)
+    train_loader = get_train_dataloader(flair_path=args.path_train_data,
+                                        gts_path=args.path_train_gts,
+                                        num_workers=args.num_workers,
+                                        patch_size=args.patch_size)
     val_loader = get_val_dataloader(flair_path=args.path_val_data, 
                                     gts_path=args.path_val_gts, 
                                     num_workers=args.num_workers)
@@ -93,7 +97,7 @@ def main(args):
     gamma_focal = 2.0
     dice_weight = 0.5
     focal_weight = 1.0
-    roi_size = (96, 96, 96)
+    roi_size = (args.patch_size, args.patch_size, args.patch_size)
     sw_batch_size = 4
     
     best_metric, best_metric_epoch = -1, -1

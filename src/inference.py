@@ -39,6 +39,9 @@ parser.add_argument('--num_workers', type=int, default=1,
 
 parser.add_argument('--threshold', type=float, default=0.35,
                     help='Probability threshold')
+parser.add_argument('--patch_size', type=int, default=96,
+                    help='Cubic sliding-window patch size. Must match the '
+                         'patch_size used at training time.')
 
 
 def get_default_device():
@@ -66,7 +69,7 @@ def main(args):
     for i in range(K):
         if args.model_name == 'SwinUNETR':
             models.append(SwinUNETR(
-                img_size=(96, 96, 96),
+                img_size=(args.patch_size, args.patch_size, args.patch_size),
                 in_channels=1,
                 out_channels=2,
                 feature_size=48,
@@ -91,7 +94,7 @@ def main(args):
 
     act = torch.nn.Softmax(dim=1)
     th = args.threshold
-    roi_size = (96, 96, 96)
+    roi_size = (args.patch_size, args.patch_size, args.patch_size)
     sw_batch_size = 4
 
     ''' Predictions loop '''

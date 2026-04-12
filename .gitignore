@@ -4,3 +4,5 @@ experiments_unet/
 checkpoints/
 data/
 output/*
+models/*
+download/*

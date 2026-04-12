@@ -16,15 +16,16 @@ from monai.transforms import (
 from scipy import ndimage
 
 
-def get_train_transforms():
-    """ Get transforms for training on FLAIR images and ground truth:
-    - Loads 3D images from Nifti file
-    - Adds channel dimention
-    - Normalises intensity
-    - Applies augmentations
-    - Crops out 32 patches of shape [96, 96, 96] that contain lesions
-    - Converts to torch.Tensor()
+def get_train_transforms(patch_size=96):
+    """ Get transforms for training on FLAIR images and ground truth.
+    Args:
+      patch_size: int, size of the cubic training patch (P, P, P). This controls
+                  how much spatial context each training example exposes.
     """
+    P = patch_size
+    # Intermediate lesion-biased crop is slightly larger than the final patch
+    # so RandSpatialCropd + RandAffined have room to jitter the center.
+    outer = P + 32
     return Compose(
         [
             LoadImaged(keys=["image", "label"]),
@@ -46,17 +47,17 @@ def get_train_transforms():
             RandGibbsNoised(keys="image", alpha=(0.0, 0.5), prob=0.2),
             RandCropByPosNegLabeld(keys=["image", "label"],
                                    label_key="label", image_key="image",
-                                   spatial_size=(128, 128, 128), num_samples=32,
+                                   spatial_size=(outer, outer, outer), num_samples=32,
                                    pos=4, neg=1),
             RandSpatialCropd(keys=["image", "label"],
-                             roi_size=(96, 96, 96),
+                             roi_size=(P, P, P),
                              random_center=True, random_size=False),
             RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=(0, 1, 2)),
             RandRotate90d(keys=["image", "label"], prob=0.5, spatial_axes=(0, 1)),
             RandRotate90d(keys=["image", "label"], prob=0.5, spatial_axes=(1, 2)),
             RandRotate90d(keys=["image", "label"], prob=0.5, spatial_axes=(0, 2)),
             RandAffined(keys=['image', 'label'], mode=('bilinear', 'nearest'),
-                        prob=1.0, spatial_size=(96, 96, 96),
+                        prob=1.0, spatial_size=(P, P, P),
                         rotate_range=(np.pi / 12, np.pi / 12, np.pi / 12),
                         scale_range=(0.1, 0.1, 0.1), padding_mode='border'),
             ToTensord(keys=["image", "label"]),
@@ -81,7 +82,7 @@ def get_val_transforms(keys=["image", "label"], image_keys=["image"]):
     )
 
 
-def get_train_dataloader(flair_path, gts_path, num_workers, cache_rate=0.1):
+def get_train_dataloader(flair_path, gts_path, num_workers, cache_rate=0.1, patch_size=96):
     """
     Get dataloader for training 
     Args:
@@ -103,7 +104,7 @@ def get_train_dataloader(flair_path, gts_path, num_workers, cache_rate=0.1):
 
     print("Number of training files:", len(files))
 
-    ds = CacheDataset(data=files, transform=get_train_transforms(),
+    ds = CacheDataset(data=files, transform=get_train_transforms(patch_size=patch_size),
                       cache_rate=cache_rate, num_workers=num_workers)
     return DataLoader(ds, batch_size=1, shuffle=True,
                       num_workers=num_workers)

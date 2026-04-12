@@ -42,14 +42,55 @@ fixed, and how those fixes shape the Lego 3 experiments that follow.
   "training-distribution ≈ test-distribution at the acquisition level."
   The augmentation explicitly relaxes that assumption.
 
-### 2. Controlled comparison: Swin UNETR window-size sweep (planned)
-- **Why:** UNet-vs-Swin changes too many factors at once. To isolate the
-  *locality* knob, keep **one backbone** (Swin UNETR) and vary only the
-  attention `window_size`, which directly controls how much global context
-  each token sees.
-- **Plan:** train Swin UNETR with `window_size ∈ {3, 7, 12}` under otherwise
-  identical settings (data, loss, optimizer, seeds, augmentation pipeline).
-- **Status:** not yet implemented.
+### Reframing: single-backbone locality study (primary), cross-model comparison (secondary)
+- After adopting the patch-size sweep as the controlled locality knob, the
+  *primary* analysis is now per-backbone — sweep `--patch_size` on a single
+  architecture and study how its failure modes shift with the visible context.
+- The original UNet-vs-Swin cross-model audit (FP-overlap IoU) is **demoted to
+  a secondary add-on**: it still runs when both backbones happen to be trained,
+  but it is not the headline result and can be turned off with
+  `--skip_comparison` (run.py) / `--no_comparison` (audit.py).
+- `src/audit.py` now accepts one OR both of `--path_unet` / `--path_swin`. The
+  per-backbone uncertainty-calibration audit (entropy at FP/FN sites) runs for
+  whichever ensemble is provided; the spatial-overlap comparison is gated on
+  having both backbones AND `--no_comparison` not being set.
+- `run.py` exposes `--models {unet,swin}` so the user can train/eval/audit a
+  single backbone, and `--skip_comparison` to suppress the cross-model step
+  even when both are present.
+
+### 2. Controlled comparison: input patch-size sweep (IMPLEMENTED)
+- **Why:** UNet-vs-Swin changes too many factors at once (capacity,
+  optimizer dynamics, normalization, receptive field). The professor asked for
+  an isolated locality knob.
+- **Original plan:** Swin UNETR `window_size ∈ {3, 7, 12}` sweep.
+- **Pivot:** MONAI 0.9.0's `SwinUNETR` does **not** expose `window_size` as a
+  constructor argument (it is hardcoded to 7 inside `SwinTransformer`).
+  Upgrading MONAI would risk breaking the new acquisition-shift augmentation
+  transforms and the rest of the pinned pipeline. We keep MONAI at 0.9.0 and
+  instead probe locality at the **input** level.
+- **Chosen knob:** cubic **training/inference patch size** `P ∈ {64, 96, 128}`.
+  This literally caps the spatial context each example exposes, applies
+  identically to *both* backbones (no architectural surgery), and is the most
+  operationally honest definition of "how much context the model can see".
+  Both `P=64` and `P=128` are multiples of 32, satisfying SwinUNETR's
+  downsampling constraint.
+- **What stays fixed across the sweep:**
+  - Architecture, channels/feature_size, optimizer, learning rate, loss,
+    augmentation pipeline, seeds, data splits, sliding-window overlap mode.
+  - Only `--patch_size` changes between runs.
+- **Where it's wired:** a single `--patch_size` CLI flag was added to
+  `src/train_unet.py`, `src/train_swin.py`, `src/test_unet.py`,
+  `src/test_swin.py`, `src/inference.py`, `src/audit.py`, and
+  `src/retention_curves.py`. In `src/data_load.py`, `get_train_transforms()`
+  and `get_train_dataloader()` now accept `patch_size`, scaling the
+  lesion-biased outer crop, `RandSpatialCropd`, and `RandAffined`
+  simultaneously. `run.py` exposes `--patch_sizes` as a list so a full sweep
+  runs from one entry point (experiment directories are tagged with
+  `_p{P}` suffixes so runs don't collide).
+- **Metrics:** same as Lego 2 (nDSC, Lesion-F1, R-AUC, mean entropy), reported
+  per patch-size, plus stratification by lesion size to test the refined
+  hypothesis (see §3).
+- **Status:** implemented; runs pending.
 
 ### 3. Refined structural assumption (planned)
 - **Old (Lego 2):** "Local spatial context is sufficient to identify MS lesions."
