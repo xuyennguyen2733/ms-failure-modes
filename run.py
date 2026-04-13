@@ -8,30 +8,6 @@ import subprocess
 import sys
 
 
-def _stop_runpod_if_requested(reason):
-    """Best-effort RunPod shutdown. Only called from the outer try/finally
-    block — and only when the reason is 'normal finish' or a non-interactive
-    crash. We specifically do NOT call this on KeyboardInterrupt so the user
-    can Ctrl+C into the tmux session without losing their pod.
-
-    Requires `runpodctl` on PATH and the `RUNPOD_POD_ID` env var (RunPod
-    sets this automatically). Silently no-ops if either is missing (e.g. on
-    a local machine) so this is always safe to call.
-    """
-    pod_id = os.environ.get("RUNPOD_POD_ID")
-    if not pod_id:
-        print(f"[run.py] stop_pod requested ({reason}) but RUNPOD_POD_ID not set — skipping.")
-        return
-    runpodctl = "runpodctl"
-    try:
-        print(f"[run.py] stop_pod ({reason}): calling `{runpodctl} stop pod {pod_id}`")
-        subprocess.call([runpodctl, "stop", "pod", pod_id])
-    except FileNotFoundError:
-        print(f"[run.py] `{runpodctl}` not found on PATH; cannot stop pod {pod_id}.")
-    except Exception as e:
-        print(f"[run.py] Failed to stop pod {pod_id}: {e}")
-
-
 def _detect_gpu_count():
     """Best-effort detection of available CUDA devices.
     Returns 0 if torch is unavailable or CUDA is not present, so the rest of
@@ -416,13 +392,6 @@ if __name__ == "__main__":
     parser.add_argument("--n_jobs", type=int, default=1,
                         help="Number of CPU workers for lesion-F1 and nDSC R-AUC "
                              "metric computation (joblib).")
-    parser.add_argument("--stop_pod_on_finish", action="store_true",
-                        help="If set AND RUNPOD_POD_ID is present in the environment, "
-                             "call `runpodctl stop pod` after the pipeline finishes "
-                             "(either normally or via an uncaught exception). "
-                             "Ctrl+C (KeyboardInterrupt) is EXCLUDED — if you interrupt "
-                             "the run yourself, the pod is left running so you don't "
-                             "get logged out of your tmux session.")
     parser.add_argument("--gpu_ids", nargs="+", type=int, default=None,
                         help="Explicit list of GPU IDs to use (e.g. --gpu_ids 0 1). "
                              "If omitted, all visible GPUs are auto-detected via "
@@ -450,40 +419,60 @@ if __name__ == "__main__":
     else:
         print("[run.py] No CUDA GPUs visible — falling back to CPU / sequential execution.")
 
-    # Run the full pipeline guarded so we can decide whether to stop the pod
-    # at the end. Ctrl+C is EXPLICITLY excluded from the stop-pod path so an
-    # interactive interruption (e.g. inside tmux on RunPod) keeps the pod up.
-    pipeline_ok = False
-    crash_reason = None
+    # Per-patch resilience: each patch-size iteration runs in its own
+    # try/except so a failure on (say) p96 does NOT prevent p128 from
+    # running. Pod lifecycle is managed by run_dev.py, which only stops
+    # the pod after run.py has fully exited.
+    per_patch_status = {}     # ps -> "ok" | "skipped: ..." | "failed: ..."
+    aborted_by_user = False
     try:
         for ps in args.patch_sizes:
             if ps % 32 != 0:
                 print(f"[run.py] WARNING: patch_size={ps} is not a multiple of 32; "
                       f"SwinUNETR will refuse to build. Skipping.")
+                per_patch_status[ps] = "skipped: not multiple of 32"
                 continue
             print(f"\n{'='*60}\n=== PATCH SIZE {ps} ===\n{'='*60}")
-
-            if not args.skip_train:
-                run_training(args.epochs, args.num_workers, ps, args.seeds,
-                             args.output_root, args.models, gpu_ids)
-            if not args.skip_eval:
-                run_evaluation(args.num_workers, ps, args.seeds,
-                               args.output_root, args.models, gpu_ids, args.epochs,
-                               args.sw_batch_size, args.n_jobs)
-            if not args.skip_inference:
-                run_inference(args.num_workers, ps, args.seeds,
-                              args.output_root, args.models, gpu_ids,
-                              args.sw_batch_size)
-            if not args.skip_qualitative:
-                run_qualitative(ps, args.output_root, args.models,
-                                args.qual_pick_seed)
-            if not args.skip_retention:
-                run_retention(args.num_workers, ps, args.seeds,
-                              args.output_root, args.models, gpu_ids,
-                              args.sw_batch_size, args.n_jobs)
-            if not args.skip_audit:
-                run_audit(args.num_workers, ps, args.output_root, args.models,
-                          args.skip_comparison, gpu_ids, args.sw_batch_size)
+            try:
+                if not args.skip_train:
+                    run_training(args.epochs, args.num_workers, ps, args.seeds,
+                                 args.output_root, args.models, gpu_ids)
+                if not args.skip_eval:
+                    run_evaluation(args.num_workers, ps, args.seeds,
+                                   args.output_root, args.models, gpu_ids, args.epochs,
+                                   args.sw_batch_size, args.n_jobs)
+                if not args.skip_inference:
+                    run_inference(args.num_workers, ps, args.seeds,
+                                  args.output_root, args.models, gpu_ids,
+                                  args.sw_batch_size)
+                if not args.skip_qualitative:
+                    run_qualitative(ps, args.output_root, args.models,
+                                    args.qual_pick_seed)
+                if not args.skip_retention:
+                    run_retention(args.num_workers, ps, args.seeds,
+                                  args.output_root, args.models, gpu_ids,
+                                  args.sw_batch_size, args.n_jobs)
+                if not args.skip_audit:
+                    run_audit(args.num_workers, ps, args.output_root, args.models,
+                              args.skip_comparison, gpu_ids, args.sw_batch_size)
+                per_patch_status[ps] = "ok"
+            except KeyboardInterrupt:
+                # Ctrl+C — propagate to the outer handler so we can abort
+                # the whole sweep (don't keep starting new patches).
+                raise
+            except SystemExit as e:
+                # A run_* helper called sys.exit() because a subprocess
+                # returned non-zero. Log, mark this patch failed, and
+                # CONTINUE with the next patch.
+                reason = f"SystemExit(code={e.code})"
+                print(f"\n[run.py] !! Patch {ps} FAILED: {reason}. "
+                      f"Continuing with remaining patch sizes.")
+                per_patch_status[ps] = f"failed: {reason}"
+            except Exception as e:
+                reason = f"{type(e).__name__}: {e}"
+                print(f"\n[run.py] !! Patch {ps} FAILED: {reason}. "
+                      f"Continuing with remaining patch sizes.")
+                per_patch_status[ps] = f"failed: {reason}"
 
         # Stage 6: aggregate across the entire sweep. Runs once, after all
         # patch sizes are processed. Non-fatal — failures only print a warning.
@@ -496,25 +485,27 @@ if __name__ == "__main__":
                 ])
             except subprocess.CalledProcessError as e:
                 print(f"[run.py] Aggregation step failed (non-fatal): {e}")
-
-        pipeline_ok = True
     except KeyboardInterrupt:
-        # User pressed Ctrl+C. Keep the pod up no matter what.
-        print("\n[run.py] KeyboardInterrupt received — pipeline aborted by user. "
-              "Pod will NOT be stopped even if --stop_pod_on_finish was set.")
-        sys.exit(130)
-    except SystemExit:
-        # A child subprocess failed and one of run_* called sys.exit(1).
-        # Treat that as a crash for stop-pod purposes — we want to release
-        # the pod rather than burn money on a failed long run.
-        crash_reason = "stage failed (SystemExit from subprocess)"
-        raise
-    except Exception as e:
-        crash_reason = f"uncaught exception: {type(e).__name__}: {e}"
-        raise
+        aborted_by_user = True
+        print("\n[run.py] KeyboardInterrupt received — pipeline aborted by user.")
     finally:
-        if args.stop_pod_on_finish:
-            if pipeline_ok:
-                _stop_runpod_if_requested("normal finish")
-            elif crash_reason is not None:
-                _stop_runpod_if_requested(f"crash — {crash_reason}")
+        # Always print a per-patch summary so run_dev.py and the user can
+        # see exactly what happened in the tmux log.
+        print("\n" + "=" * 60)
+        print("SWEEP SUMMARY")
+        print("=" * 60)
+        for ps in args.patch_sizes:
+            status = per_patch_status.get(ps, "not reached")
+            print(f"  patch_size={ps:4d}  ->  {status}")
+        print("=" * 60)
+
+    # Exit code policy:
+    #   - 130 if the user hit Ctrl+C (POSIX convention; run_dev.py uses
+    #     this to decide NOT to stop the pod).
+    #   - 0 if at least one patch produced ok results.
+    #   - 1 if every patch failed (so run_dev.py still stops the pod
+    #     because there's nothing left worth keeping the GPU for).
+    if aborted_by_user:
+        sys.exit(130)
+    any_ok = any(v == "ok" for v in per_patch_status.values())
+    sys.exit(0 if any_ok else 1)
