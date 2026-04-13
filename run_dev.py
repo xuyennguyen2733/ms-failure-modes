@@ -11,8 +11,7 @@ Modes
           end-to-end run — used for smoke tests / sanity checks.
 - lite  : 50 epochs, 2 seeds, 2 patch sizes, both models. Mid-length run
           for iterating on hypotheses without paying for a full sweep.
-- full  : 150 epochs, 3 seeds, 3 patch sizes, both models. The setup the
-          Lego-3 report numbers should come from.
+- full  : 150 epochs, 3 seeds, 3 patch sizes, both models. 
 
 Tmux
 ----
@@ -32,6 +31,7 @@ import sys
 
 # Preset configurations. Keep these in sync with the run.py CLI.
 MODES = {
+    # UNet-only locality sweep. For testing the full pipeline with a single run per model, patch size, and seed.
     "dummy": {
         "epochs":      1,
         "seeds":       [1],
@@ -41,19 +41,41 @@ MODES = {
         "n_jobs":      1,
         "sw_batch_size": 4,
     },
+    # UNet-only locality sweep.
     "lite": {
         "epochs":      50,
         "seeds":       [1, 2],
         "patch_sizes": [64, 96],
-        "models":      ["unet", "swin"],
+        "models":      ["unet"],
         "num_workers": 4,
         "n_jobs":      4,
         "sw_batch_size": 4,
     },
+    # UNet-only locality sweep.
     "full": {
         "epochs":      150,
         "seeds":       [1, 2, 3],
         "patch_sizes": [64, 96, 128],
+        "models":      ["unet"],
+        "num_workers": 8,
+        "n_jobs":      8,
+        "sw_batch_size": 8,
+    },
+    # Swin-only locality sweep. 
+    "swin": {
+        "epochs":      150,
+        "seeds":       [1, 2, 3],
+        "patch_sizes": [64, 128],
+        "models":      ["swin"],
+        "num_workers": 8,
+        "n_jobs":      8,
+        "sw_batch_size": 8,
+    },
+    # Both models.
+    "extra": {
+        "epochs":      150,
+        "seeds":       [1, 2],
+        "patch_sizes": [64, 128],
         "models":      ["unet", "swin"],
         "num_workers": 8,
         "n_jobs":      8,

@@ -43,64 +43,65 @@ def _detect_gpu_count():
         return 0
 
 
-def _launch_per_model_parallel(jobs, gpu_ids, label):
-    """Launch per-model jobs concurrently, pinning each to one GPU.
+def _launch_parallel(jobs, gpu_ids, label):
+    """Schedule N jobs across M GPUs using a simple wave scheduler.
 
-    Parameters
+    Each wave launches `min(pending, M)` subprocesses, one per free GPU.
+    When all subprocesses in a wave finish, the next wave starts. This
+    keeps GPU 1 busy even when only one model is being investigated
+    (by fanning out *seeds* across GPUs) — a strict generalization of
+    the old "one job per GPU, single shot" launcher.
+
     jobs : list[tuple[str, list[str]]]
-        List of (job_name, command) pairs. Each `command` is the argv list
-        passed to subprocess; we do NOT add CUDA flags to it — we instead
-        scope GPU visibility via the CUDA_VISIBLE_DEVICES environment
-        variable so the child sees only "its" GPU as cuda:0 and no code
-        change is needed inside the train/test/inference scripts.
+        (job_name, argv) pairs. CUDA_VISIBLE_DEVICES is set per-process
+        so each child sees its assigned GPU as cuda:0. No code change is
+        needed in train/test/inference scripts.
     gpu_ids : list[int] | None
-        Which GPU IDs are available. If None or shorter than `jobs`, jobs
-        are run sequentially on the available GPU(s) — never bypassing the
-        single-GPU machine assumption.
+        Available GPU IDs. None/empty -> CPU fallback, fully sequential.
     label : str
-        Stage label used in error messages.
+        Stage label used in log messages.
     """
     if not jobs:
         return
-
-    # Decide a launch plan: how many we can fan out at once.
-    n_jobs = len(jobs)
     n_gpus = len(gpu_ids) if gpu_ids else 0
 
-    if n_gpus >= n_jobs and n_jobs > 1:
-        print(f"[run.py] {label}: launching {n_jobs} jobs in parallel "
-              f"across GPUs {gpu_ids[:n_jobs]}")
+    # CPU fallback — sequential, no env tweaking.
+    if n_gpus == 0:
+        for name, cmd in jobs:
+            print(f"[run.py] {label}: [{name}] on CPU (sequential, no CUDA)")
+            ret = subprocess.call(cmd)
+            if ret != 0:
+                print(f"[run.py] {label} FAILED for {name} (rc={ret})")
+                sys.exit(1)
+        return
+
+    width = min(n_gpus, len(jobs))
+    print(f"[run.py] {label}: scheduling {len(jobs)} jobs across "
+          f"{n_gpus} GPU(s) (wave width={width})")
+
+    failed = []
+    for wave_start in range(0, len(jobs), width):
+        wave = jobs[wave_start : wave_start + width]
         procs = []
-        for (name, cmd), gpu in zip(jobs, gpu_ids[:n_jobs]):
+        for i, (name, cmd) in enumerate(wave):
+            gpu = gpu_ids[i % n_gpus]
             env = os.environ.copy()
             env["CUDA_VISIBLE_DEVICES"] = str(gpu)
             print(f"[run.py]   -> [{name}] on GPU {gpu}")
             procs.append((name, gpu, subprocess.Popen(cmd, env=env)))
-        # Wait for all and collect failures
-        failed = []
         for name, gpu, p in procs:
             ret = p.wait()
             if ret != 0:
                 failed.append((name, gpu, ret))
-        if failed:
-            for name, gpu, ret in failed:
-                print(f"[run.py] {label} FAILED for {name} on GPU {gpu} (rc={ret})")
-            sys.exit(1)
-    else:
-        # Sequential fallback. Either single GPU, single job, or no GPUs.
-        # When 1 GPU is available, pin every job to it for consistency;
-        # when 0 GPUs, leave the env alone and let the script run on CPU.
-        for (name, cmd) in jobs:
-            env = os.environ.copy()
-            if n_gpus >= 1:
-                env["CUDA_VISIBLE_DEVICES"] = str(gpu_ids[0])
-                print(f"[run.py] {label}: [{name}] on GPU {gpu_ids[0]} (sequential)")
-            else:
-                print(f"[run.py] {label}: [{name}] on CPU (sequential, no CUDA)")
-            ret = subprocess.call(cmd, env=env)
-            if ret != 0:
-                print(f"[run.py] {label} FAILED for {name} (rc={ret})")
-                sys.exit(1)
+
+    if failed:
+        for name, gpu, ret in failed:
+            print(f"[run.py] {label} FAILED for {name} on GPU {gpu} (rc={ret})")
+        sys.exit(1)
+
+
+# Backwards-compat alias so existing call sites keep working.
+_launch_per_model_parallel = _launch_parallel
 
 
 def install_requirements():
@@ -165,20 +166,22 @@ def run_training(epochs, num_workers, patch_size, seeds, output_root,
         for seed in seeds:
             os.makedirs(os.path.join(save_base, f"seed{seed}"), exist_ok=True)
 
-    # Parallelize per-model at each seed: at seed S, unet and swin run
-    # simultaneously on different GPUs. Seeds are still sequential so that
-    # RAM footprint stays bounded. This mirrors how the user described it:
-    # "everything that can be done separately for each model should also be
-    # run separately on 2 different GPUs if possible."
-    for seed in seeds:
-        jobs = []
-        for model_name, script, save_base in models:
+    # Build one flat (model × seed) job list and let the wave scheduler fan
+    # it out across all available GPUs. This means:
+    #   - both models + 2 GPUs → UNet seed1 and Swin seed1 run in parallel
+    #   - single model + 2 GPUs → seed1 and seed2 run in parallel (then seed3 solo)
+    # Both cases keep *every* GPU busy whenever there's more than one job
+    # left, regardless of whether the axis filling the second GPU is model
+    # or seed.
+    jobs = []
+    for model_name, script, save_base in models:
+        for seed in seeds:
             save_path = os.path.join(save_base, f"seed{seed}")
             jobs.append((
                 f"train/{model_name}/seed{seed}/p{patch_size}",
                 _build_train_cmd(script, seed, epochs, paths, save_path, num_workers, patch_size),
             ))
-        _launch_per_model_parallel(jobs, gpu_ids, f"Training seed {seed}")
+    _launch_parallel(jobs, gpu_ids, f"Training p={patch_size}")
 
 
 def run_evaluation(num_workers, patch_size, seeds, output_root,
