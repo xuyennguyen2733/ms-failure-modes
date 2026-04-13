@@ -42,6 +42,8 @@ parser.add_argument('--threshold', type=float, default=0.35,
 parser.add_argument('--patch_size', type=int, default=96,
                     help='Cubic sliding-window patch size. Must match the '
                          'patch_size used at training time.')
+parser.add_argument('--sw_batch_size', type=int, default=4,
+                    help='Sliding-window batch size (patches per forward pass).')
 
 
 def get_default_device():
@@ -95,7 +97,7 @@ def main(args):
     act = torch.nn.Softmax(dim=1)
     th = args.threshold
     roi_size = (args.patch_size, args.patch_size, args.patch_size)
-    sw_batch_size = 4
+    sw_batch_size = args.sw_batch_size
 
     ''' Predictions loop '''
     with torch.no_grad():

@@ -8,6 +8,30 @@ import subprocess
 import sys
 
 
+def _stop_runpod_if_requested(reason):
+    """Best-effort RunPod shutdown. Only called from the outer try/finally
+    block — and only when the reason is 'normal finish' or a non-interactive
+    crash. We specifically do NOT call this on KeyboardInterrupt so the user
+    can Ctrl+C into the tmux session without losing their pod.
+
+    Requires `runpodctl` on PATH and the `RUNPOD_POD_ID` env var (RunPod
+    sets this automatically). Silently no-ops if either is missing (e.g. on
+    a local machine) so this is always safe to call.
+    """
+    pod_id = os.environ.get("RUNPOD_POD_ID")
+    if not pod_id:
+        print(f"[run.py] stop_pod requested ({reason}) but RUNPOD_POD_ID not set — skipping.")
+        return
+    runpodctl = "runpodctl"
+    try:
+        print(f"[run.py] stop_pod ({reason}): calling `{runpodctl} stop pod {pod_id}`")
+        subprocess.call([runpodctl, "stop", "pod", pod_id])
+    except FileNotFoundError:
+        print(f"[run.py] `{runpodctl}` not found on PATH; cannot stop pod {pod_id}.")
+    except Exception as e:
+        print(f"[run.py] Failed to stop pod {pod_id}: {e}")
+
+
 def _detect_gpu_count():
     """Best-effort detection of available CUDA devices.
     Returns 0 if torch is unavailable or CUDA is not present, so the rest of
@@ -23,7 +47,6 @@ def _launch_per_model_parallel(jobs, gpu_ids, label):
     """Launch per-model jobs concurrently, pinning each to one GPU.
 
     Parameters
-    ----------
     jobs : list[tuple[str, list[str]]]
         List of (job_name, command) pairs. Each `command` is the argv list
         passed to subprocess; we do NOT add CUDA flags to it — we instead
@@ -159,12 +182,15 @@ def run_training(epochs, num_workers, patch_size, seeds, output_root,
 
 
 def run_evaluation(num_workers, patch_size, seeds, output_root,
-                   selected_models, gpu_ids):
+                   selected_models, gpu_ids, epochs, sw_batch_size, n_jobs):
     print(f"\n>>> Evaluation (patch_size={patch_size}, models={selected_models})")
 
     test_data = os.path.join("data", "dev_out", "flair")
     test_gts = os.path.join("data", "dev_out", "gt")
     test_bm = os.path.join("data", "dev_out", "fg_mask")
+
+    log_dir = os.path.join(output_root, "eval_reports")
+    os.makedirs(log_dir, exist_ok=True)
 
     evals = _filter_models([
         ("unet", "src/test_unet.py", _exp_dir(output_root, "experiments_unet", patch_size)),
@@ -182,6 +208,11 @@ def run_evaluation(num_workers, patch_size, seeds, output_root,
             "--threshold", "0.35",
             "--num_workers", str(num_workers),
             "--patch_size", str(patch_size),
+            "--sw_batch_size", str(sw_batch_size),
+            "--n_jobs", str(n_jobs),
+            "--log_dir", log_dir,
+            "--model_label", f"{model_name}_p{patch_size}",
+            "--train_epochs", str(epochs),
             "--seeds",
         ] + [str(s) for s in seeds]
         jobs.append((f"eval/{model_name}/p{patch_size}", cmd))
@@ -189,7 +220,7 @@ def run_evaluation(num_workers, patch_size, seeds, output_root,
 
 
 def run_inference(num_workers, patch_size, seeds, output_root,
-                  selected_models, gpu_ids):
+                  selected_models, gpu_ids, sw_batch_size):
     print(f"\n>>> Inference (patch_size={patch_size}, models={selected_models})")
 
     test_data = os.path.join("data", "eval_in", "flair")
@@ -215,13 +246,54 @@ def run_inference(num_workers, patch_size, seeds, output_root,
             "--num_models", str(len(seeds)),
             "--num_workers", str(num_workers),
             "--patch_size", str(patch_size),
+            "--sw_batch_size", str(sw_batch_size),
         ]
         jobs.append((f"infer/{key}/p{patch_size}", cmd))
     _launch_per_model_parallel(jobs, gpu_ids, f"Inference p={patch_size}")
 
 
+def run_retention(num_workers, patch_size, seeds, output_root,
+                  selected_models, gpu_ids, sw_batch_size, n_jobs):
+    """Generate nDSC retention curves per backbone. Parallelized across GPUs
+    the same way as training/eval — one backbone per GPU when possible."""
+    print(f"\n>>> Retention curves (patch_size={patch_size}, models={selected_models})")
+
+    rc_data = os.path.join("data", "dev_out", "flair")
+    rc_gts = os.path.join("data", "dev_out", "gt")
+    rc_bm = os.path.join("data", "dev_out", "fg_mask")
+
+    save_dir = os.path.join(output_root, "retention_curves", f"p{patch_size}")
+    os.makedirs(save_dir, exist_ok=True)
+
+    configs = [
+        ("unet", "UNet",      _exp_dir(output_root, "experiments_unet", patch_size)),
+        ("swin", "SwinUNETR", _exp_dir(output_root, "experiments_swin", patch_size)),
+    ]
+    configs = [(key, name, mdir) for key, name, mdir in configs if key in selected_models]
+
+    jobs = []
+    for key, model_name, model_dir in configs:
+        cmd = [
+            sys.executable, "src/retention_curves.py",
+            "--model_name", model_name,
+            "--path_model", model_dir,
+            "--path_data", rc_data,
+            "--path_gts", rc_gts,
+            "--path_bm", rc_bm,
+            "--num_models", str(len(seeds)),
+            "--num_workers", str(num_workers),
+            "--n_jobs", str(n_jobs),
+            "--patch_size", str(patch_size),
+            "--sw_batch_size", str(sw_batch_size),
+            "--path_save", save_dir,
+            "--curve_label", f"{key}_p{patch_size}",
+        ]
+        jobs.append((f"retention/{key}/p{patch_size}", cmd))
+    _launch_per_model_parallel(jobs, gpu_ids, f"Retention curves p={patch_size}")
+
+
 def run_audit(num_workers, patch_size, output_root, selected_models,
-              skip_comparison, gpu_ids):
+              skip_comparison, gpu_ids, sw_batch_size):
     """Audit is intentionally single-process — when the joined cross-model
     comparison runs, both ensembles have to live in the same Python process.
     We pin the whole thing to ONE GPU (the first available) so the comparison
@@ -240,6 +312,7 @@ def run_audit(num_workers, patch_size, output_root, selected_models,
         "--path_bm", audit_bm,
         "--num_workers", str(num_workers),
         "--patch_size", str(patch_size),
+        "--sw_batch_size", str(sw_batch_size),
         "--path_save", os.path.join(output_root, "visualization", f"p{patch_size}"),
     ]
     if "unet" in selected_models:
@@ -275,18 +348,36 @@ if __name__ == "__main__":
     parser.add_argument("--output_root", type=str, default=".",
                         help="Parent directory for all generated artifacts "
                              "(experiments_*, predictions_*, visualization/). "
-                             "Defaults to the repo root. On RunPod, set this to "
-                             "a single folder like 'download' so every output "
-                             "can be fetched with one command.")
+                             "Defaults to the repo root.")
     parser.add_argument("--skip_install", action="store_true", help="Skip dependency installation")
     parser.add_argument("--skip_train", action="store_true", help="Skip training phase")
     parser.add_argument("--skip_eval", action="store_true", help="Skip evaluation phase")
     parser.add_argument("--skip_inference", action="store_true", help="Skip inference phase")
+    parser.add_argument("--skip_retention", action="store_true",
+                        help="Skip retention-curve generation (Stage 5).")
+    parser.add_argument("--skip_aggregate", action="store_true",
+                        help="Skip the post-sweep aggregator (Stage 6) that "
+                             "collates eval logs, audit JSON, and retention curves "
+                             "into <output_root>/aggregated/.")
     parser.add_argument("--skip_audit", action="store_true", help="Skip audit phase entirely")
     parser.add_argument("--skip_comparison", action="store_true",
                         help="Run the audit but skip the secondary cross-model "
                              "FP-overlap comparison (UNet vs Swin). The primary "
                              "per-backbone uncertainty audit still runs.")
+    parser.add_argument("--sw_batch_size", type=int, default=4,
+                        help="Sliding-window batch size used at eval/inference/"
+                             "audit time (patches per forward pass). Higher is "
+                             "faster if GPU memory allows. Does not affect training.")
+    parser.add_argument("--n_jobs", type=int, default=1,
+                        help="Number of CPU workers for lesion-F1 and nDSC R-AUC "
+                             "metric computation (joblib).")
+    parser.add_argument("--stop_pod_on_finish", action="store_true",
+                        help="If set AND RUNPOD_POD_ID is present in the environment, "
+                             "call `runpodctl stop pod` after the pipeline finishes "
+                             "(either normally or via an uncaught exception). "
+                             "Ctrl+C (KeyboardInterrupt) is EXCLUDED — if you interrupt "
+                             "the run yourself, the pod is left running so you don't "
+                             "get logged out of your tmux session.")
     parser.add_argument("--gpu_ids", nargs="+", type=int, default=None,
                         help="Explicit list of GPU IDs to use (e.g. --gpu_ids 0 1). "
                              "If omitted, all visible GPUs are auto-detected via "
@@ -314,22 +405,68 @@ if __name__ == "__main__":
     else:
         print("[run.py] No CUDA GPUs visible — falling back to CPU / sequential execution.")
 
-    for ps in args.patch_sizes:
-        if ps % 32 != 0:
-            print(f"[run.py] WARNING: patch_size={ps} is not a multiple of 32; "
-                  f"SwinUNETR will refuse to build. Skipping.")
-            continue
-        print(f"\n{'='*60}\n=== PATCH SIZE {ps} ===\n{'='*60}")
+    # Run the full pipeline guarded so we can decide whether to stop the pod
+    # at the end. Ctrl+C is EXPLICITLY excluded from the stop-pod path so an
+    # interactive interruption (e.g. inside tmux on RunPod) keeps the pod up.
+    pipeline_ok = False
+    crash_reason = None
+    try:
+        for ps in args.patch_sizes:
+            if ps % 32 != 0:
+                print(f"[run.py] WARNING: patch_size={ps} is not a multiple of 32; "
+                      f"SwinUNETR will refuse to build. Skipping.")
+                continue
+            print(f"\n{'='*60}\n=== PATCH SIZE {ps} ===\n{'='*60}")
 
-        if not args.skip_train:
-            run_training(args.epochs, args.num_workers, ps, args.seeds,
-                         args.output_root, args.models, gpu_ids)
-        if not args.skip_eval:
-            run_evaluation(args.num_workers, ps, args.seeds,
-                           args.output_root, args.models, gpu_ids)
-        if not args.skip_inference:
-            run_inference(args.num_workers, ps, args.seeds,
-                          args.output_root, args.models, gpu_ids)
-        if not args.skip_audit:
-            run_audit(args.num_workers, ps, args.output_root, args.models,
-                      args.skip_comparison, gpu_ids)
+            if not args.skip_train:
+                run_training(args.epochs, args.num_workers, ps, args.seeds,
+                             args.output_root, args.models, gpu_ids)
+            if not args.skip_eval:
+                run_evaluation(args.num_workers, ps, args.seeds,
+                               args.output_root, args.models, gpu_ids, args.epochs,
+                               args.sw_batch_size, args.n_jobs)
+            if not args.skip_inference:
+                run_inference(args.num_workers, ps, args.seeds,
+                              args.output_root, args.models, gpu_ids,
+                              args.sw_batch_size)
+            if not args.skip_retention:
+                run_retention(args.num_workers, ps, args.seeds,
+                              args.output_root, args.models, gpu_ids,
+                              args.sw_batch_size, args.n_jobs)
+            if not args.skip_audit:
+                run_audit(args.num_workers, ps, args.output_root, args.models,
+                          args.skip_comparison, gpu_ids, args.sw_batch_size)
+
+        # Stage 6: aggregate across the entire sweep. Runs once, after all
+        # patch sizes are processed. Non-fatal — failures only print a warning.
+        if not args.skip_aggregate:
+            print(f"\n>>> Aggregating results under {args.output_root}/aggregated/")
+            try:
+                subprocess.check_call([
+                    sys.executable, "src/aggregate_results.py",
+                    "--output_root", args.output_root,
+                ])
+            except subprocess.CalledProcessError as e:
+                print(f"[run.py] Aggregation step failed (non-fatal): {e}")
+
+        pipeline_ok = True
+    except KeyboardInterrupt:
+        # User pressed Ctrl+C. Keep the pod up no matter what.
+        print("\n[run.py] KeyboardInterrupt received — pipeline aborted by user. "
+              "Pod will NOT be stopped even if --stop_pod_on_finish was set.")
+        sys.exit(130)
+    except SystemExit:
+        # A child subprocess failed and one of run_* called sys.exit(1).
+        # Treat that as a crash for stop-pod purposes — we want to release
+        # the pod rather than burn money on a failed long run.
+        crash_reason = "stage failed (SystemExit from subprocess)"
+        raise
+    except Exception as e:
+        crash_reason = f"uncaught exception: {type(e).__name__}: {e}"
+        raise
+    finally:
+        if args.stop_pod_on_finish:
+            if pipeline_ok:
+                _stop_runpod_if_requested("normal finish")
+            elif crash_reason is not None:
+                _stop_runpod_if_requested(f"crash — {crash_reason}")

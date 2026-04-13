@@ -1,7 +1,9 @@
 """
-Computation of performance metrics (nDSC, lesion F1 score, nDSC R-AUC) 
+Computation of performance metrics (nDSC, lesion F1 score, nDSC R-AUC)
 for an ensemble of models (SwinUNETR version).
-Metrics are displayed in console.
+
+Metrics are written incrementally to eval_reports/swin_eval_log_<timestamp>.txt
+so results survive interruption. See src/eval_logger.py.
 """
 
 import argparse
@@ -14,6 +16,7 @@ import numpy as np
 from data_load import remove_connected_components, get_val_dataloader
 from metrics import dice_norm_metric, lesion_f1_score, ndsc_aac_metric
 from uncertainty import ensemble_uncertainties_classification
+from eval_logger import EvalLogger
 
 parser = argparse.ArgumentParser(description='Get all command line arguments.')
 
@@ -39,6 +42,16 @@ parser.add_argument('--threshold', type=float, default=0.35,
 parser.add_argument('--patch_size', type=int, default=96,
                     help='Cubic sliding-window patch size used for inference. '
                          'Must match the patch_size used at training time.')
+parser.add_argument('--log_dir', type=str, default='eval_reports',
+                    help='Directory where the evaluation log file is written.')
+parser.add_argument('--train_epochs', type=int, default=None,
+                    help='Number of training epochs, logged as metadata.')
+parser.add_argument('--model_label', type=str, default='swin',
+                    help='Short label embedded in the log file name.')
+parser.add_argument('--sw_batch_size', type=int, default=4,
+                    help='Sliding-window batch size: number of patches pushed '
+                         'through the GPU per forward pass. Increase to speed '
+                         'up inference if GPU memory allows.')
 
 
 def get_default_device():
@@ -51,6 +64,24 @@ def get_default_device():
 
 
 def main(args):
+    logger = EvalLogger(model_label=args.model_label, log_dir=args.log_dir)
+    logger.config({
+        "architecture":   "SwinUNETR",
+        "patch_size":     args.patch_size,
+        "feature_size":   48,
+        "threshold":      args.threshold,
+        "seeds":          args.seeds,
+        "num_models":     len(args.seeds),
+        "train_epochs":   args.train_epochs if args.train_epochs is not None else "n/a",
+        "path_model":     args.path_model,
+        "path_data":      args.path_data,
+        "path_gts":       args.path_gts,
+        "path_bm":        args.path_bm,
+        "num_workers":    args.num_workers,
+        "n_jobs":         args.n_jobs,
+        "sw_batch_size":  args.sw_batch_size,
+    })
+
     device = get_default_device()
     torch.multiprocessing.set_sharing_strategy('file_system')
 
@@ -84,9 +115,11 @@ def main(args):
     act = torch.nn.Softmax(dim=1)
     th = args.threshold
     roi_size = (args.patch_size, args.patch_size, args.patch_size)
-    sw_batch_size = 4
+    sw_batch_size = args.sw_batch_size
 
     ndsc, f1, ndsc_aac, mean_entropy = [], [], [], []
+    metric_names = ["nDSC(%)", "F1(%)", "nDSC_RAUC(%)", "mean_entropy"]
+    logger.per_subject_header(metric_names)
 
     ''' Evaluatioin loop '''
     with Parallel(n_jobs=args.n_jobs) as parallel_backend:
@@ -125,27 +158,41 @@ def main(args):
                 uncs_map = uncs_dict['reverse_mutual_information']
                 pred_entropy = uncs_dict['entropy_of_expected']
 
-                ndsc += [dice_norm_metric(ground_truth=gt, predictions=seg)]
-                f1 += [lesion_f1_score(ground_truth=gt,
-                                       predictions=seg,
-                                       IoU_threshold=0.5,
-                                       parallel_backend=parallel_backend)]
-                ndsc_aac += [ndsc_aac_metric(ground_truth=gt[brain_mask == 1].flatten(),
-                                             predictions=seg[brain_mask == 1].flatten(),
-                                             uncertainties=uncs_map[brain_mask == 1].flatten(),
-                                             parallel_backend=parallel_backend)]
-                
-                mean_entropy += [np.mean(pred_entropy[brain_mask == 1])]
+                subj_ndsc = dice_norm_metric(ground_truth=gt, predictions=seg)
+                subj_f1 = lesion_f1_score(ground_truth=gt,
+                                          predictions=seg,
+                                          IoU_threshold=0.5,
+                                          parallel_backend=parallel_backend)
+                subj_aac = ndsc_aac_metric(ground_truth=gt[brain_mask == 1].flatten(),
+                                           predictions=seg[brain_mask == 1].flatten(),
+                                           uncertainties=uncs_map[brain_mask == 1].flatten(),
+                                           parallel_backend=parallel_backend)
+                subj_ent = float(np.mean(pred_entropy[brain_mask == 1]))
+
+                ndsc.append(subj_ndsc)
+                f1.append(subj_f1)
+                ndsc_aac.append(subj_aac)
+                mean_entropy.append(subj_ent)
+
+                logger.per_subject_row(count, [
+                    subj_ndsc * 100.0,
+                    subj_f1 * 100.0,
+                    subj_aac * 100.0,
+                    subj_ent,
+                ])
 
     ndsc = np.asarray(ndsc) * 100.
     f1 = np.asarray(f1) * 100.
     ndsc_aac = np.asarray(ndsc_aac) * 100.
     mean_entropy = np.asarray(mean_entropy)
 
-    print(f"nDSC:\t{np.mean(ndsc):.4f} +- {np.std(ndsc):.4f}")
-    print(f"Lesion F1 score:\t{np.mean(f1):.4f} +- {np.std(f1):.4f}")
-    print(f"nDSC R-AUC:\t{np.mean(ndsc_aac):.4f} +- {np.std(ndsc_aac):.4f}")
-    print(f"Predictive Entropy:\t{np.mean(mean_entropy):.4f} +- {np.std(mean_entropy):.4f}")
+    logger.summary([
+        ("nDSC (%)",            float(np.mean(ndsc)),         float(np.std(ndsc))),
+        ("Lesion F1 (%)",       float(np.mean(f1)),           float(np.std(f1))),
+        ("nDSC R-AUC (%)",      float(np.mean(ndsc_aac)),     float(np.std(ndsc_aac))),
+        ("Pred. Entropy",       float(np.mean(mean_entropy)), float(np.std(mean_entropy))),
+    ])
+    logger.close()
 
 
 if __name__ == "__main__":

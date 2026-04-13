@@ -1,8 +1,10 @@
 venv/
 experiments_swin/
 experiments_unet/
+predictions_swin/
+predictions_unet/
 checkpoints/
-data/
+data/*
 output/*
 models/*
 download/*

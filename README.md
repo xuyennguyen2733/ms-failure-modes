@@ -107,6 +107,23 @@ python run.py --epochs 300 --seeds 1 2 3 --num_workers 10
   FP-overlap comparison (UNet vs Swin). The primary per-backbone uncertainty
   audit still runs. Useful for the single-backbone locality study, where the
   two-model comparison is only a secondary add-on.
+- `--sw_batch_size 8` — sliding-window batch size at eval/inference/audit
+  (patches per forward pass). Higher = faster if the GPU has memory. Defaults
+  to 4. Does **not** affect training.
+- `--n_jobs 8` — CPU parallelism for the `lesion_f1_score` and `nDSC R-AUC`
+  metrics (joblib). For Swin on a multi-core pod, raising this from the
+  default `1` is usually the single biggest eval-time speedup.
+- `--stop_pod_on_finish` — on RunPod only: if set, calls `runpodctl stop pod
+  $RUNPOD_POD_ID` after the pipeline finishes (normal completion *or* a crash
+  in a child stage). **Ctrl+C is explicitly excluded** — an interactive
+  interruption leaves the pod running so you don't get kicked out of tmux.
+  No-op on machines without `RUNPOD_POD_ID` set.
+- `--gpu_ids 0 1` — explicit GPU list. If omitted, all visible GPUs are
+  auto-detected. When training both UNet and Swin on 2+ GPUs, each model is
+  automatically pinned to its own GPU via `CUDA_VISIBLE_DEVICES` and the two
+  models run **in parallel** (one per GPU). Evaluation and inference parallelize
+  the same way. The audit always runs on a single GPU because the
+  cross-model comparison requires both ensembles in one Python process.
 
 Each patch size produces its own tagged output directories
 (`experiments_unet_p64/`, `predictions_swin_p96/`, `visualization/p128/`, ...)

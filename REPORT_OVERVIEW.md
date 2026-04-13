@@ -92,14 +92,30 @@ fixed, and how those fixes shape the Lego 3 experiments that follow.
   hypothesis (see §3).
 - **Status:** implemented; runs pending.
 
-### 3. Refined structural assumption (planned)
+### 3. Refined structural assumption (PARTIALLY IMPLEMENTED)
 - **Old (Lego 2):** "Local spatial context is sufficient to identify MS lesions."
 - **New (Lego 3):** "Local context is sufficient for typical, well-circumscribed
   lesions, but global context becomes necessary at periventricular boundaries,
   near scanner artifacts, and for ambiguous low-contrast lesions where local
   texture alone overlaps normal anatomy."
-- **Status:** to be reflected in Phase-1 write-up and in a lesion-stratified
-  audit (by size and/or anatomical location) in `src/audit.py`.
+- **Lesion-size stratification implemented in `src/audit.py`:**
+  - GT lesions are bucketed by voxel count: `small (<10)`, `medium (10-50)`,
+    `large (>=50)`. Edges live in `LESION_SIZE_BINS` at the top of the file
+    so they are easy to defend / change.
+  - For each bucket and each backbone, the audit reports lesion **detection
+    recall** (fraction of GT lesions for which any predicted voxel overlaps)
+    and the **mean predictive entropy across missed-lesion voxels** (proxy
+    for "did the model know it was missing this kind of lesion?").
+  - Also writes a `stratified_recall.png` bar plot per backbone.
+- **What this lets us test directly:**
+  - If recall on `small` lesions improves with larger patch size (more global
+    context), the refined hypothesis is supported.
+  - If FN entropy on `small` lesions stays low while recall stays low, the
+    model is *confidently missing* small lesions — a clinically dangerous
+    failure mode worth flagging in the report.
+- **Still planned:** anatomical-location stratification (periventricular vs
+  juxtacortical vs deep WM) — requires segmentation atlases not currently
+  in the data, so deferred.
 
 ### 4. Reporting improvements (planned)
 - Per-subject distributions (boxplots) instead of mean ± std only.

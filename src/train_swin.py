@@ -1,7 +1,7 @@
 """
 @author: Originally by Francesco La Rosa
-         Adapted by Vatsal Raina, Nataliia Molchanova
-         Adapted for SwinUNETR
+         Adapted by Vatsal Raina and Nataliia Molchanova for Shifts 2.0 Benchmark
+         Adapted by Xuyen Nguyen for SwinUNETR
 """
 
 import argparse
