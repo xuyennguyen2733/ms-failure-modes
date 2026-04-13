@@ -255,6 +255,43 @@ def run_inference(num_workers, patch_size, seeds, output_root,
     _launch_per_model_parallel(jobs, gpu_ids, f"Inference p={patch_size}")
 
 
+def run_qualitative(patch_size, output_root, selected_models, pick_seed):
+    """Render one random subject's FLAIR + GT + prediction + uncertainty panel
+    per backbone. CPU-only (nilearn + matplotlib), so no GPU pinning is
+    needed. Uses `data/eval_in/` as the source because that is where
+    inference.py writes its *_pred_seg / *_uncs_rmi outputs."""
+    print(f"\n>>> Qualitative viz (patch_size={patch_size}, models={selected_models})")
+
+    flair_dir = os.path.join("data", "eval_in", "flair")
+    gt_dir    = os.path.join("data", "eval_in", "gt")
+    save_dir  = os.path.join(output_root, "qualitative", f"p{patch_size}")
+    os.makedirs(save_dir, exist_ok=True)
+
+    configs = [
+        ("unet", _exp_dir(output_root, "predictions_unet", patch_size)),
+        ("swin", _exp_dir(output_root, "predictions_swin", patch_size)),
+    ]
+    configs = [(key, pdir) for key, pdir in configs if key in selected_models]
+
+    for key, pred_dir in configs:
+        if not os.path.isdir(pred_dir):
+            print(f"[run.py] Qualitative: {pred_dir} missing (inference not run?) — skipping {key}")
+            continue
+        cmd = [
+            sys.executable, "src/qualitative_viz.py",
+            "--flair_dir",   flair_dir,
+            "--gt_dir",      gt_dir,
+            "--pred_dir",    pred_dir,
+            "--save_dir",    save_dir,
+            "--pick_seed",   str(pick_seed),
+            "--model_label", f"{key}_p{patch_size}",
+        ]
+        try:
+            subprocess.check_call(cmd)
+        except subprocess.CalledProcessError as e:
+            print(f"[run.py] Qualitative failed for {key} p={patch_size} (non-fatal): {e}")
+
+
 def run_retention(num_workers, patch_size, seeds, output_root,
                   selected_models, gpu_ids, sw_batch_size, n_jobs):
     """Generate nDSC retention curves per backbone. Parallelized across GPUs
@@ -356,6 +393,11 @@ if __name__ == "__main__":
     parser.add_argument("--skip_train", action="store_true", help="Skip training phase")
     parser.add_argument("--skip_eval", action="store_true", help="Skip evaluation phase")
     parser.add_argument("--skip_inference", action="store_true", help="Skip inference phase")
+    parser.add_argument("--skip_qualitative", action="store_true",
+                        help="Skip the qualitative nilearn slice panels.")
+    parser.add_argument("--qual_pick_seed", type=int, default=42,
+                        help="RNG seed for picking which eval_in subject the "
+                             "qualitative panels visualize (default: 42).")
     parser.add_argument("--skip_retention", action="store_true",
                         help="Skip retention-curve generation (Stage 5).")
     parser.add_argument("--skip_aggregate", action="store_true",
@@ -432,6 +474,9 @@ if __name__ == "__main__":
                 run_inference(args.num_workers, ps, args.seeds,
                               args.output_root, args.models, gpu_ids,
                               args.sw_batch_size)
+            if not args.skip_qualitative:
+                run_qualitative(ps, args.output_root, args.models,
+                                args.qual_pick_seed)
             if not args.skip_retention:
                 run_retention(args.num_workers, ps, args.seeds,
                               args.output_root, args.models, gpu_ids,
