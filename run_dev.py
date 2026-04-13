@@ -133,24 +133,46 @@ def stop_pod_now(reason):
 
 def _build_tmux_bash_snippet(run_py_cmd, stop_pod):
     """Wrap the `python run.py ...` command in a small bash snippet that:
-      1. Runs run.py and captures its exit code.
-      2. Prints a summary line (so the tmux scrollback is self-contained).
-      3. If `stop_pod` is True AND run.py did not exit with 130 (Ctrl+C),
-         calls `runpodctl stop pod $RUNPOD_POD_ID`.
+      1. Installs a SIGHUP/SIGTERM trap that LEAVES THE POD UP. This way,
+         any intentional way of killing the tmux session — `tmux kill-session`,
+         `tmux kill-server`, or attaching and Ctrl+C'ing — will NOT stop
+         the pod. The user has to explicitly intend "the pipeline finished
+         on its own" before runpodctl is invoked.
+      2. Runs run.py and captures its exit code.
+      3. If `stop_pod` is True AND run.py did not exit with 130 (Ctrl+C
+         path inside run.py), calls `runpodctl stop pod $RUNPOD_POD_ID`.
 
     The snippet runs ENTIRELY inside the tmux session, so even if the user
-    detaches and runpod nukes the run_dev.py parent, the cleanup still
-    happens after the pipeline genuinely finishes.
+    detaches and run_dev.py exits, the cleanup still fires when the
+    pipeline genuinely finishes.
+
+    Termination matrix (assuming stop_pod=True):
+      - run.py exits 0 / non-130           -> pod stopped
+      - run.py exits 130 (KeyboardInterrupt) -> pod LEFT UP (rc check)
+      - tmux kill-session / kill-server    -> pod LEFT UP (SIGHUP trap)
+      - tmux kill-window / pane            -> pod LEFT UP (SIGHUP trap)
+      - RunPod sends SIGTERM at hard limit -> pod LEFT UP (SIGTERM trap;
+                                              the hardware shutdown will
+                                              release it anyway)
     """
     inner = " ".join(shlex.quote(c) for c in run_py_cmd)
     if not stop_pod:
         # Just run the pipeline and exit — no cleanup, no pod-stop.
         return inner
 
-    # Use $RUNPOD_POD_ID lazily inside the tmux session — it is set by
-    # RunPod automatically. If runpodctl is missing or the var is unset we
-    # print a notice instead of failing.
+    # Note: we keep the `set ...` to a minimum so the snippet stays robust
+    # under different bash versions on RunPod images.
     return (
+        # Trap intentional terminations: print why we're leaving the pod
+        # up, then exit. Without this, SIGHUP from `tmux kill-session`
+        # would still fall through to the rc check below and could stop
+        # the pod, which is the opposite of what the user wants when
+        # they're tearing down tmux on purpose.
+        'trap '
+        '\'echo ""; '
+        'echo "[run_dev/tmux] Caught termination signal (tmux kill or hangup) — leaving pod up."; '
+        f'exit {RUNPY_KEYBOARD_INTERRUPT_RC}\' '
+        'SIGHUP SIGTERM; '
         f'{inner}; '
         f'rc=$?; '
         f'echo ""; echo "[run_dev/tmux] run.py exited with rc=$rc"; '
