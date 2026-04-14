@@ -61,7 +61,7 @@ MODES = {
     "full": {
         "epochs":      150,
         "seeds":       [1, 2, 3],
-        "patch_sizes": [64, 96, 128],
+        "patch_sizes": [128],
         "models":      ["unet"],
         "num_workers": 8,
         "n_jobs":      8,
