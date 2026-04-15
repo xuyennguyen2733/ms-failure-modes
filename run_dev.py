@@ -99,11 +99,12 @@ MODES = {
 }
 
 
-def build_run_cmd(mode_cfg, output_root, aug_profile):
+def build_run_cmd(mode_cfg, output_root, aug_profile, passthrough=()):
     """Build the argv for `python run.py ...` from a preset dict.
 
-    Pod-stop logic lives in run_dev.py (this file) — run.py is just a
-    pipeline runner now and knows nothing about RunPod.
+    `passthrough` is appended verbatim, so any flag run.py accepts but
+    run_dev.py doesn't define (e.g. --skip_train, --gpu_ids) can be forwarded
+    transparently.
     """
     return [
         sys.executable, "run.py",
@@ -116,7 +117,8 @@ def build_run_cmd(mode_cfg, output_root, aug_profile):
         "--sw_batch_size", str(mode_cfg["sw_batch_size"]),
         "--output_root", output_root,
         "--aug_profile", aug_profile,
-        "--skip_install",  # devs install once; don't waste time on every dev run
+        "--skip_install",
+        *passthrough,
     ]
 
 
@@ -265,17 +267,17 @@ def main():
                         default=None,
                         help="If set, launches the run inside a detached tmux "
                              "session with this name. Implicitly enables "
-                             "--stop_pod (the whole point of tmux mode is "
+                             "--stop-pod (the whole point of tmux mode is "
                              "long-running RunPod jobs).")
-    parser.add_argument("--stop_pod", action="store_true",
+    parser.add_argument("--stop-pod", action="store_true",
                         help="After run.py finishes, call `runpodctl stop pod "
                              "$RUNPOD_POD_ID`. Auto-on when --run-on-tmux is set. "
                              "Skipped on Ctrl+C so an interactive interrupt never "
                              "costs you the pod by accident.")
-    parser.add_argument("--output_root", default="download",
+    parser.add_argument("--output-root", default="download",
                         help="Output root passed through to run.py "
                              "(default: download — single-folder for RunPod).")
-    parser.add_argument("--aug_profile", default="full",
+    parser.add_argument("--aug-profile", default="full",
                         choices=["full", "no_acquisition", "no_geometric",
                                  "no_intensity", "minimal"],
                         help="Augmentation profile forwarded to run.py "
@@ -283,17 +285,22 @@ def main():
                              "run.py nests its entire output tree under "
                              "<output_root>/run_aug-<profile>/, so baseline "
                              "and ablation runs do not collide.")
-    args = parser.parse_args()
+    # parse_known_args lets you pass through any run.py flag that run_dev.py
+    # itself doesn't define (e.g. --skip_train, --skip_audit, --gpu_ids).
+    args, passthrough = parser.parse_known_args()
 
     cfg = MODES[args.mode]
     print(f"[run_dev] mode={args.mode}  config={cfg}")
+    if passthrough:
+        print(f"[run_dev] passthrough to run.py: {passthrough}")
 
     # Tmux mode implies stop_pod (otherwise the pod sits idle after the
     # detached run finishes — exactly what we're trying to avoid).
     stop_pod = args.stop_pod or bool(args.tmux_session)
 
     cmd = build_run_cmd(cfg, output_root=args.output_root,
-                        aug_profile=args.aug_profile)
+                        aug_profile=args.aug_profile,
+                        passthrough=passthrough)
 
     if args.tmux_session:
         launch_in_tmux(args.tmux_session, cmd, stop_pod=stop_pod)

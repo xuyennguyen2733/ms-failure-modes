@@ -181,6 +181,9 @@ def run_evaluation(num_workers, patch_size, seeds, output_root,
 
     jobs = []
     for model_name, script, model_dir in evals:
+        # Dump dev_out predictions so experiments.py can run on them without
+        # an extra GPU pass.
+        pred_dir = _exp_dir(output_root, f"predictions_{model_name}", patch_size) + "_devout"
         cmd = [
             sys.executable, script,
             "--path_model", model_dir,
@@ -195,6 +198,7 @@ def run_evaluation(num_workers, patch_size, seeds, output_root,
             "--log_dir", log_dir,
             "--model_label", f"{model_name}_p{patch_size}",
             "--train_epochs", str(epochs),
+            "--path_pred", pred_dir,
             "--seeds",
         ] + [str(s) for s in seeds]
         jobs.append((f"eval/{model_name}/p{patch_size}", cmd))

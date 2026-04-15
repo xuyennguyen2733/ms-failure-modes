@@ -8,10 +8,12 @@ so results survive interruption. See src/eval_logger.py.
 
 import argparse
 import os
+import re
 import torch
 from joblib import Parallel
 from monai.inferers import sliding_window_inference
 from monai.networks.nets import UNet
+from monai.data import write_nifti
 import numpy as np
 from data_load import remove_connected_components, get_val_dataloader
 from metrics import dice_norm_metric, lesion_f1_score, ndsc_aac_metric
@@ -52,6 +54,11 @@ parser.add_argument('--sw_batch_size', type=int, default=4,
                     help='Sliding-window batch size: number of patches pushed '
                          'through the GPU per forward pass. Increase to speed '
                          'up inference if GPU memory allows.')
+parser.add_argument('--path_pred', type=str, default=None,
+                    help='If set, dump per-subject pred_prob / pred_seg / '
+                         'uncs_rmi NIfTI files to this directory during '
+                         'evaluation (same format as inference.py). No extra '
+                         'GPU cost — reuses the sliding-window outputs.')
 
 
 def get_default_device():
@@ -120,6 +127,9 @@ def main(args):
     metric_names = ["nDSC(%)", "F1(%)", "nDSC_RAUC(%)", "mean_entropy"]
     logger.per_subject_header(metric_names)
 
+    if args.path_pred:
+        os.makedirs(args.path_pred, exist_ok=True)
+
     ''' Evaluatioin loop '''
     with Parallel(n_jobs=args.n_jobs) as parallel_backend:
         with torch.no_grad():
@@ -140,7 +150,8 @@ def main(args):
                     all_outputs.append(outputs)
                 all_outputs = np.asarray(all_outputs)
 
-                seg = np.mean(all_outputs, axis=0)
+                prob_mean = np.mean(all_outputs, axis=0)
+                seg = prob_mean.copy()
                 seg[seg >= th] = 1
                 seg[seg < th] = 0
                 seg = np.squeeze(seg)
@@ -155,6 +166,25 @@ def main(args):
                     axis=-1))
                 uncs_map = uncs_dict['reverse_mutual_information']
                 pred_entropy = uncs_dict['entropy_of_expected']
+
+                if args.path_pred:
+                    meta = batch_data['image_meta_dict']
+                    original_affine = meta['original_affine'][0]
+                    affine = meta['affine'][0]
+                    spatial_shape = meta['spatial_shape'][0]
+                    fname = os.path.basename(meta['filename_or_obj'][0])
+                    for arr, tag, mode in (
+                        (prob_mean,              "pred_prob", "bilinear"),
+                        (seg,                    "pred_seg",  "nearest"),
+                        (uncs_map * brain_mask,  "uncs_rmi",  "bilinear"),
+                    ):
+                        out_name = re.sub("FLAIR_isovox.nii.gz",
+                                          f"{tag}.nii.gz", fname)
+                        write_nifti(arr, os.path.join(args.path_pred, out_name),
+                                    affine=original_affine,
+                                    target_affine=affine,
+                                    mode=mode,
+                                    output_spatial_shape=spatial_shape)
 
                 subj_ndsc = dice_norm_metric(ground_truth=gt, predictions=seg)
                 subj_f1 = lesion_f1_score(ground_truth=gt,
