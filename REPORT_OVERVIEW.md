@@ -68,12 +68,10 @@ fixed, and how those fixes shape the Lego 3 experiments that follow.
   Upgrading MONAI would risk breaking the new acquisition-shift augmentation
   transforms and the rest of the pinned pipeline. We keep MONAI at 0.9.0 and
   instead probe locality at the **input** level.
-- **Chosen knob:** cubic **training/inference patch size** `P ∈ {64, 96, 128}`.
-  This literally caps the spatial context each example exposes, applies
-  identically to *both* backbones (no architectural surgery), and is the most
-  operationally honest definition of "how much context the model can see".
-  Both `P=64` and `P=128` are multiples of 32, satisfying SwinUNETR's
-  downsampling constraint.
+- **Chosen knob:** cubic **training/inference patch size** `P ∈ {64, 96}`.
+  Originally planned `{64, 96, 128}`, but `P=128` consistently OOM'd on the
+  2× 3090 pod for both UNet and SwinUNETR, so it was dropped. The remaining
+  two-point sweep still isolates the locality knob cleanly.
 - **What stays fixed across the sweep:**
   - Architecture, channels/feature_size, optimizer, learning rate, loss,
     augmentation pipeline, seeds, data splits, sliding-window overlap mode.
@@ -134,3 +132,24 @@ fixed-up baseline above — not on top of the original Lego 2 code. The
 supervision constraint (label scarcity / corruption / coarsening — TBD) will
 be the only variable changed between the Lego-3 baseline and the Lego-3
 constrained system.
+
+### Augmentation ablation (Tier-1 experiment)
+
+- **Knob:** `--aug_profile` on `run.py` / `run_dev.py`, implemented via
+  `AUG_PROFILES` in `src/data_load.py`. Controls three orthogonal groups:
+  `acquisition`, `intensity`, `geometric`.
+- **Profiles available:** `full` (baseline), `no_acquisition`, `no_geometric`,
+  `no_intensity`, `minimal`.
+- **Actual ablation:** `full` vs `minimal`. Measures the *total* contribution
+  of all augmentation groups combined (upper bound vs floor). Does not
+  attribute the effect to any specific group, which is scoped out explicitly
+  in the report discussion.
+- **Isolation:** one profile per `run_dev.py` invocation. Each run nests
+  under `<output_root>/run_aug-<profile>/` so baseline and ablation never
+  collide. `src/aggregate_results.py` walks all profile subdirs and produces
+  a tagged comparison table.
+- **Cost:** ~6h per profile on 2× 3090 at `ablation` mode. `full` already
+  exists from the locality sweep, so only `minimal` needs to be run (~6h).
+- **Decided against:** `no_acquisition`, `no_geometric`, `no_intensity`.
+  Attribution to specific groups would need one of these, but only
+  warrants a follow-up run if `minimal` results are surprising.

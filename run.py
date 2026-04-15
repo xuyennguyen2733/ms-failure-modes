@@ -105,7 +105,8 @@ def _filter_models(specs, selected):
     return [s for s in specs if s[0] in selected]
 
 
-def _build_train_cmd(script, seed, epochs, paths, save_path, num_workers, patch_size):
+def _build_train_cmd(script, seed, epochs, paths, save_path, num_workers,
+                     patch_size, aug_profile):
     train_data, train_gts, val_data, val_gts = paths
     return [
         sys.executable, script,
@@ -118,11 +119,12 @@ def _build_train_cmd(script, seed, epochs, paths, save_path, num_workers, patch_
         "--path_save", save_path,
         "--num_workers", str(num_workers),
         "--patch_size", str(patch_size),
+        "--aug_profile", aug_profile,
     ]
 
 
 def run_training(epochs, num_workers, patch_size, seeds, output_root,
-                 selected_models, gpu_ids):
+                 selected_models, gpu_ids, aug_profile):
     print(f"\n>>> Training (epochs={epochs}, patch_size={patch_size}, models={selected_models})")
 
     paths = (
@@ -155,7 +157,8 @@ def run_training(epochs, num_workers, patch_size, seeds, output_root,
             save_path = os.path.join(save_base, f"seed{seed}")
             jobs.append((
                 f"train/{model_name}/seed{seed}/p{patch_size}",
-                _build_train_cmd(script, seed, epochs, paths, save_path, num_workers, patch_size),
+                _build_train_cmd(script, seed, epochs, paths, save_path,
+                                 num_workers, patch_size, aug_profile),
             ))
     _launch_parallel(jobs, gpu_ids, f"Training p={patch_size}")
 
@@ -365,6 +368,12 @@ if __name__ == "__main__":
                         help="Parent directory for all generated artifacts "
                              "(experiments_*, predictions_*, visualization/). "
                              "Defaults to the repo root.")
+    parser.add_argument("--aug_profile", type=str, default="full",
+                        help="Augmentation profile passed to the train scripts "
+                             "(see src/data_load.py AUG_PROFILES). Everything the "
+                             "pipeline writes is nested under "
+                             "<output_root>/run_aug-<profile>/ so baseline and "
+                             "ablation runs do not collide.")
     parser.add_argument("--skip_install", action="store_true", help="Skip dependency installation")
     parser.add_argument("--skip_train", action="store_true", help="Skip training phase")
     parser.add_argument("--skip_eval", action="store_true", help="Skip evaluation phase")
@@ -404,7 +413,13 @@ if __name__ == "__main__":
     if not args.skip_install:
         install_requirements()
 
+    # Nest the output root so that different augmentation profiles never
+    # collide. Baseline lands under <root>/run_aug-full/..., ablation lands
+    # under <root>/run_aug-no_acquisition/..., etc. Every downstream stage
+    # inherits the nested root for free because we reassign args.output_root.
+    args.output_root = os.path.join(args.output_root, f"run_aug-{args.aug_profile}")
     os.makedirs(args.output_root, exist_ok=True)
+    print(f"[run.py] aug_profile={args.aug_profile}")
     print(f"[run.py] All outputs will be written under: {os.path.abspath(args.output_root)}")
 
     # GPU plan. Explicit --gpu_ids always wins; otherwise auto-detect.
@@ -436,7 +451,8 @@ if __name__ == "__main__":
             try:
                 if not args.skip_train:
                     run_training(args.epochs, args.num_workers, ps, args.seeds,
-                                 args.output_root, args.models, gpu_ids)
+                                 args.output_root, args.models, gpu_ids,
+                                 args.aug_profile)
                 if not args.skip_eval:
                     run_evaluation(args.num_workers, ps, args.seeds,
                                    args.output_root, args.models, gpu_ids, args.epochs,

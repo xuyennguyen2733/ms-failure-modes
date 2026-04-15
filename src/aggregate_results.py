@@ -1,26 +1,3 @@
-"""
-Post-sweep aggregator for the Lego-3 pipeline.
-
-Walks a completed `--output_root` directory and produces a single place
-containing everything the report needs:
-
-  <output_root>/aggregated/
-    ├── summary_table.csv           one row per (model, patch_size) with mean/std
-    ├── summary_table.md            markdown table to paste into the report
-    ├── stratified_recall.csv       one row per (model, patch_size, bucket)
-    ├── recall_by_patch_size.png    line plot — the refined-hypothesis figure
-    ├── retention_curves_combined.png   all retention curves on one axes
-    └── audit_summary.csv           per-patch-size audit scalars (FP IoU, entropies)
-
-Inputs consumed (all produced by run.py):
-  - eval_reports/<model>_p<P>_eval_log_*.txt   (eval metrics)
-  - visualization/p<P>/audit_raw.json          (audit + stratification)
-  - retention_curves/p<P>/nDSC_rc_<label>.npy  (+ fracs_retained.npy)
-
-The aggregator only reads files; it never re-runs GPU work. It is safe to
-call repeatedly — each call overwrites the files under `aggregated/`.
-"""
-
 import argparse
 import csv
 import glob
@@ -280,48 +257,296 @@ def plot_combined_retention(rc_root, out_dir):
 
 # ================================= main ==================================
 
+def _discover_roots(root):
+    """Return a list of (aug_profile, root_path) pairs.
+
+    Handles two cases transparently:
+      1. Nested leaf: `root` directly contains eval_reports/ etc. In this
+         case we extract the profile from the basename (run_aug-<profile>)
+         and return a single entry. Defaults to "full" if the basename
+         does not match.
+      2. Top-level parent: `root` contains one or more run_aug-*/ sub-
+         directories. Return one entry per subdirectory. This is how the
+         aggregator gets run manually when the user wants a combined
+         baseline-vs-ablation view.
+    """
+    # Case 1: leaf
+    if os.path.isdir(os.path.join(root, "eval_reports")) or \
+       os.path.isdir(os.path.join(root, "visualization")):
+        base = os.path.basename(os.path.normpath(root))
+        m = re.match(r"run_aug-(.+)", base)
+        profile = m.group(1) if m else "full"
+        return [(profile, root)]
+
+    # Case 2: parent containing nested profile dirs
+    pairs = []
+    for entry in sorted(os.listdir(root)):
+        if not entry.startswith("run_aug-"):
+            continue
+        sub = os.path.join(root, entry)
+        if not os.path.isdir(sub):
+            continue
+        profile = entry[len("run_aug-"):]
+        pairs.append((profile, sub))
+    return pairs
+
+
+def _aggregate_one(root, profile):
+    """Walk a single leaf root and return the collected data structures.
+    Does not write anything on its own — the caller merges and writes."""
+    per_profile = {
+        "profile": profile,
+        "entries": {},       # (model, patch) -> eval entry
+        "audit_raw": {},     # patch -> audit_raw dict
+    }
+
+    eval_dir = os.path.join(root, "eval_reports")
+    if os.path.isdir(eval_dir):
+        per_profile["entries"] = collect_latest_eval_logs(eval_dir)
+    else:
+        print(f"[aggregate] [{profile}] missing {eval_dir} — skipping eval logs")
+
+    viz_dir = os.path.join(root, "visualization")
+    if os.path.isdir(viz_dir):
+        per_profile["audit_raw"] = collect_audit_raw(viz_dir)
+    else:
+        print(f"[aggregate] [{profile}] missing {viz_dir} — skipping audit raw")
+
+    return per_profile
+
+
 def main():
-    ap = argparse.ArgumentParser(description="Aggregate Lego-3 pipeline outputs.")
+    ap = argparse.ArgumentParser(description="Aggregate pipeline outputs.")
     ap.add_argument("--output_root", default="download",
-                    help="Directory that run.py wrote its artifacts to.")
+                    help="Directory that run.py wrote its artifacts to. "
+                         "Works both with a nested profile root "
+                         "(e.g. download/run_aug-full) and with a top-level "
+                         "parent that contains several run_aug-*/ subdirs.")
     args = ap.parse_args()
 
     root = args.output_root
     out_dir = os.path.join(root, "aggregated")
     os.makedirs(out_dir, exist_ok=True)
 
-    # --- Summary table from eval logs ---
-    eval_dir = os.path.join(root, "eval_reports")
-    if os.path.isdir(eval_dir):
-        entries = collect_latest_eval_logs(eval_dir)
-        if entries:
-            write_summary_csv_md(entries, out_dir)
-        else:
-            print(f"[aggregate] no completed eval logs found in {eval_dir}")
-    else:
-        print(f"[aggregate] missing {eval_dir} — skipping summary table")
+    profile_roots = _discover_roots(root)
+    if not profile_roots:
+        print(f"[aggregate] no profile-tagged subdirs or leaf artifacts found under {root}")
+        return
 
-    # --- Stratified recall + audit scalars ---
-    viz_dir = os.path.join(root, "visualization")
-    if os.path.isdir(viz_dir):
-        audit_raw = collect_audit_raw(viz_dir)
-        if audit_raw:
-            strat_rows = write_stratified_csv(audit_raw, out_dir)
-            plot_recall_by_patch_size(strat_rows, out_dir)
-            write_audit_scalars_csv(audit_raw, out_dir)
-        else:
-            print(f"[aggregate] no audit_raw.json files found under {viz_dir}")
-    else:
-        print(f"[aggregate] missing {viz_dir} — skipping stratified/audit outputs")
+    print(f"[aggregate] found {len(profile_roots)} profile root(s): "
+          f"{[p for p, _ in profile_roots]}")
 
-    # --- Combined retention curves ---
-    rc_dir = os.path.join(root, "retention_curves")
-    if os.path.isdir(rc_dir):
-        plot_combined_retention(rc_dir, out_dir)
+    # --- Collect per-profile ---
+    per_profile_data = [_aggregate_one(r, p) for p, r in profile_roots]
+
+    # --- Summary table (tagged with profile column) ---
+    all_entries = {}  # (profile, model, patch) -> entry
+    for pp in per_profile_data:
+        for (model, patch), entry in pp["entries"].items():
+            all_entries[(pp["profile"], model, patch)] = entry
+    if all_entries:
+        _write_summary_across_profiles(all_entries, out_dir)
     else:
-        print(f"[aggregate] missing {rc_dir} — skipping combined retention plot")
+        print("[aggregate] no eval-log entries found across any profile")
+
+    # --- Stratified recall (tagged with profile column) ---
+    all_strat_rows = []
+    for pp in per_profile_data:
+        if not pp["audit_raw"]:
+            continue
+        for row in _stratified_rows_from_raw(pp["audit_raw"]):
+            row["profile"] = pp["profile"]
+            all_strat_rows.append(row)
+    if all_strat_rows:
+        _write_stratified_across_profiles(all_strat_rows, out_dir)
+        _plot_recall_by_patch_size_multi_profile(all_strat_rows, out_dir)
+    else:
+        print("[aggregate] no audit_raw.json found across any profile")
+
+    # --- Audit scalars per profile (tagged) ---
+    all_audit_rows = []
+    for pp in per_profile_data:
+        if not pp["audit_raw"]:
+            continue
+        for row in _audit_scalar_rows_from_raw(pp["audit_raw"]):
+            row["profile"] = pp["profile"]
+            all_audit_rows.append(row)
+    if all_audit_rows:
+        _write_audit_scalars_across_profiles(all_audit_rows, out_dir)
+
+    # --- Combined retention curves (aggregated across all profile roots) ---
+    # plot_combined_retention walks <root>/retention_curves/ which only
+    # exists at the leaf level. Call it once per profile and merge.
+    _plot_retention_across_profiles(profile_roots, out_dir)
 
     print(f"\n[aggregate] done — artifacts under: {os.path.abspath(out_dir)}")
+
+
+# ------------------- helpers for the multi-profile path --------------------
+
+def _write_summary_across_profiles(entries, out_dir):
+    rows = []
+    for (profile, model, patch), e in sorted(entries.items()):
+        row = {"profile": profile, "model": model, "patch_size": patch}
+        for key, short in METRIC_ORDER:
+            mean, std = e.get(key, (float("nan"), float("nan")))
+            row[f"{short}_mean"] = mean
+            row[f"{short}_std"] = std
+        rows.append(row)
+
+    csv_path = os.path.join(out_dir, "summary_table.csv")
+    with open(csv_path, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+        w.writeheader()
+        w.writerows(rows)
+    print(f"[aggregate] wrote {csv_path}")
+
+    md_path = os.path.join(out_dir, "summary_table.md")
+    with open(md_path, "w") as f:
+        header = ["profile", "model", "patch"] + [s for _, s in METRIC_ORDER]
+        f.write("| " + " | ".join(header) + " |\n")
+        f.write("|" + "|".join(["---"] * len(header)) + "|\n")
+        for row in rows:
+            cells = [row["profile"], row["model"], str(row["patch_size"])]
+            for _, short in METRIC_ORDER:
+                mean = row[f"{short}_mean"]
+                std = row[f"{short}_std"]
+                cells.append(f"{mean:.2f} ± {std:.2f}")
+            f.write("| " + " | ".join(cells) + " |\n")
+    print(f"[aggregate] wrote {md_path}")
+
+
+def _stratified_rows_from_raw(audit_raw):
+    rows = []
+    for patch, data in sorted(audit_raw.items()):
+        for model_key, strata_key in (("unet", "unet_strata"),
+                                       ("swin", "swin_strata")):
+            strata = data.get(strata_key, {})
+            if not strata:
+                continue
+            for bucket_name, bucket in strata.items():
+                n_total = bucket["n_total"]
+                n_detected = bucket["n_detected"]
+                recall = (n_detected / n_total) if n_total > 0 else float("nan")
+                fn_ent = (float(np.mean(bucket["fn_entropies"]))
+                          if bucket["fn_entropies"] else float("nan"))
+                rows.append({
+                    "model": model_key,
+                    "patch_size": patch,
+                    "bucket": bucket_name,
+                    "n_total": n_total,
+                    "n_detected": n_detected,
+                    "recall": recall,
+                    "mean_fn_entropy": fn_ent,
+                })
+    return rows
+
+
+def _audit_scalar_rows_from_raw(audit_raw):
+    rows = []
+    for patch, data in sorted(audit_raw.items()):
+        row = {"patch_size": patch}
+        for k in ("unet_fp_entropy", "swin_fp_entropy",
+                  "unet_fn_entropy", "swin_fn_entropy"):
+            vals = data.get(k, [])
+            row[f"{k}_mean"] = float(np.mean(vals)) if vals else float("nan")
+            row[f"{k}_n"] = len(vals)
+        fp_ious = [x for x in data.get("fp_ious", []) if x is not None]
+        row["fp_iou_mean"] = float(np.mean(fp_ious)) if fp_ious else float("nan")
+        row["fp_iou_n"] = len(fp_ious)
+        rows.append(row)
+    return rows
+
+
+def _write_stratified_across_profiles(rows, out_dir):
+    csv_path = os.path.join(out_dir, "stratified_recall.csv")
+    fieldnames = ["profile", "model", "patch_size", "bucket",
+                  "n_total", "n_detected", "recall", "mean_fn_entropy"]
+    with open(csv_path, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=fieldnames)
+        w.writeheader()
+        w.writerows(rows)
+    print(f"[aggregate] wrote {csv_path}")
+
+
+def _write_audit_scalars_across_profiles(rows, out_dir):
+    csv_path = os.path.join(out_dir, "audit_summary.csv")
+    fieldnames = ["profile"] + [k for k in rows[0].keys() if k != "profile"]
+    with open(csv_path, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=fieldnames)
+        w.writeheader()
+        w.writerows(rows)
+    print(f"[aggregate] wrote {csv_path}")
+
+
+def _plot_recall_by_patch_size_multi_profile(rows, out_dir):
+    """One line per (profile, model, bucket). When a single profile is
+    present this collapses to the original plot layout."""
+    if not rows:
+        return
+    by_series = defaultdict(list)
+    for r in rows:
+        key = (r["profile"], r["model"], r["bucket"])
+        by_series[key].append((r["patch_size"], r["recall"]))
+
+    fig, ax = plt.subplots(figsize=(9, 6))
+    for (profile, model, bucket), pts in sorted(by_series.items()):
+        pts = sorted(pts)
+        xs = [p[0] for p in pts]
+        ys = [p[1] for p in pts]
+        ls = "-" if model == "unet" else "--"
+        ax.plot(xs, ys, marker="o", linestyle=ls,
+                label=f"{profile}/{model}/{bucket}")
+    ax.set_xlabel("Training/inference patch size (voxels)")
+    ax.set_ylabel("Lesion detection recall")
+    ax.set_ylim(0, 1.0)
+    ax.set_title("Lesion-size-stratified recall vs. spatial context")
+    ax.legend(loc="best", fontsize=7)
+    fig.tight_layout()
+    png_path = os.path.join(out_dir, "recall_by_patch_size.png")
+    fig.savefig(png_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"[aggregate] wrote {png_path}")
+
+
+def _plot_retention_across_profiles(profile_roots, out_dir):
+    """Walk each leaf's retention_curves/ and put every curve on one axes,
+    labeled with profile+patch+model."""
+    fig, ax = plt.subplots(figsize=(8, 5))
+    plotted = 0
+    fracs_seen = None
+    for profile, root in profile_roots:
+        rc_root = os.path.join(root, "retention_curves")
+        if not os.path.isdir(rc_root):
+            continue
+        for p_dir in sorted(glob.glob(os.path.join(rc_root, "p*"))):
+            fracs_path = os.path.join(p_dir, "fracs_retained.npy")
+            if not os.path.exists(fracs_path):
+                continue
+            fracs_seen = np.load(fracs_path)
+            for npy in sorted(glob.glob(os.path.join(p_dir, "nDSC_rc_*.npy"))):
+                name = os.path.basename(npy)
+                if name.startswith("nDSC_rc_all_"):
+                    continue
+                label = name.replace("nDSC_rc_", "").replace(".npy", "")
+                y = np.load(npy)
+                if y.ndim != 1 or len(y) != len(fracs_seen):
+                    continue
+                ax.plot(fracs_seen, y, label=f"{profile}/{label}")
+                plotted += 1
+    if plotted == 0:
+        plt.close(fig)
+        return
+    ax.set_xlabel("Retention Fraction")
+    ax.set_ylabel("nDSC")
+    ax.set_xlim(0, 1.01)
+    ax.set_title("nDSC Retention Curves — all runs")
+    ax.legend(loc="best", fontsize=7)
+    fig.tight_layout()
+    png_path = os.path.join(out_dir, "retention_curves_combined.png")
+    fig.savefig(png_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    print(f"[aggregate] wrote {png_path}")
 
 
 if __name__ == "__main__":

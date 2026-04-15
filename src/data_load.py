@@ -15,43 +15,79 @@ from monai.transforms import (
     RandGibbsNoised)
 from scipy import ndimage
 
+AUG_PROFILES = {
+    "full":            {"acquisition": True,  "intensity": True,  "geometric": True},
+    "no_acquisition":  {"acquisition": False, "intensity": True,  "geometric": True},
+    "no_geometric":    {"acquisition": True,  "intensity": True,  "geometric": False},
+    "no_intensity":    {"acquisition": True,  "intensity": False, "geometric": True},
+    "minimal":         {"acquisition": False, "intensity": False, "geometric": False},
+}
 
-def get_train_transforms(patch_size=96):
+
+def get_train_transforms(patch_size=96, aug_profile="full"):
     """ Get transforms for training on FLAIR images and ground truth.
+
     Args:
-      patch_size: int, size of the cubic training patch (P, P, P). This controls
-                  how much spatial context each training example exposes.
+      patch_size: int, size of the cubic training patch (P, P, P). This
+                  controls how much spatial context each training example
+                  exposes.
+      aug_profile: str, one of the keys in AUG_PROFILES. Controls which
+                   augmentation groups are active.
     """
+    if aug_profile not in AUG_PROFILES:
+        raise ValueError(f"Unknown aug_profile={aug_profile!r}. "
+                         f"Valid choices: {list(AUG_PROFILES.keys())}")
+    flags = AUG_PROFILES[aug_profile]
     P = patch_size
-    # Intermediate lesion-biased crop is slightly larger than the final patch
-    # so RandSpatialCropd + RandAffined have room to jitter the center.
-    outer = P + 32
-    return Compose(
-        [
-            LoadImaged(keys=["image", "label"]),
-            AddChanneld(keys=["image", "label"]),
-            # --- Acquisition / scanner-shift simulators (image-only, pre-normalize) ---
-            # Applied to raw intensities to mimic cross-scanner variability
-            # (bias fields, protocol-driven contrast, nonlinear intensity remap).
+    outer = P + 32  # lesion-biased crop size — slightly larger so later
+                    # RandSpatialCropd / RandAffined have room to jitter.
+
+    t = [
+        LoadImaged(keys=["image", "label"]),
+        AddChanneld(keys=["image", "label"]),
+    ]
+
+    # --- Group A (pre-normalize): acquisition-shift simulators ---
+    if flags["acquisition"]:
+        t += [
             RandBiasFieldd(keys="image", coeff_range=(0.0, 0.1), degree=3, prob=0.3),
             RandAdjustContrastd(keys="image", gamma=(0.7, 1.5), prob=0.3),
             RandHistogramShiftd(keys="image", num_control_points=10, prob=0.2),
-            NormalizeIntensityd(keys=["image"], nonzero=True),
-            # --- Post-normalize intensity perturbations ---
+        ]
+
+    t.append(NormalizeIntensityd(keys=["image"], nonzero=True))
+
+    # --- Group B (post-normalize): always-on intensity jitter ---
+    if flags["intensity"]:
+        t += [
             RandShiftIntensityd(keys="image", offsets=0.1, prob=1.0),
             RandScaleIntensityd(keys="image", factors=0.1, prob=1.0),
+        ]
+
+    # --- Group A (post-normalize): noise/smooth/gibbs — still "acquisition" ---
+    if flags["acquisition"]:
+        t += [
             RandGaussianNoised(keys="image", mean=0.0, std=0.05, prob=0.2),
             RandGaussianSmoothd(keys="image",
                                 sigma_x=(0.5, 1.0), sigma_y=(0.5, 1.0), sigma_z=(0.5, 1.0),
                                 prob=0.2),
             RandGibbsNoised(keys="image", alpha=(0.0, 0.5), prob=0.2),
-            RandCropByPosNegLabeld(keys=["image", "label"],
-                                   label_key="label", image_key="image",
-                                   spatial_size=(outer, outer, outer), num_samples=32,
-                                   pos=4, neg=1),
-            RandSpatialCropd(keys=["image", "label"],
-                             roi_size=(P, P, P),
-                             random_center=True, random_size=False),
+        ]
+
+    # --- Cropping (unconditional — infrastructure, not augmentation) ---
+    t += [
+        RandCropByPosNegLabeld(keys=["image", "label"],
+                               label_key="label", image_key="image",
+                               spatial_size=(outer, outer, outer), num_samples=32,
+                               pos=4, neg=1),
+        RandSpatialCropd(keys=["image", "label"],
+                         roi_size=(P, P, P),
+                         random_center=True, random_size=False),
+    ]
+
+    # --- Group C: geometric augmentation ---
+    if flags["geometric"]:
+        t += [
             RandFlipd(keys=["image", "label"], prob=0.5, spatial_axis=(0, 1, 2)),
             RandRotate90d(keys=["image", "label"], prob=0.5, spatial_axes=(0, 1)),
             RandRotate90d(keys=["image", "label"], prob=0.5, spatial_axes=(1, 2)),
@@ -60,9 +96,9 @@ def get_train_transforms(patch_size=96):
                         prob=1.0, spatial_size=(P, P, P),
                         rotate_range=(np.pi / 12, np.pi / 12, np.pi / 12),
                         scale_range=(0.1, 0.1, 0.1), padding_mode='border'),
-            ToTensord(keys=["image", "label"]),
         ]
-    )
+    t.append(ToTensord(keys=["image", "label"]))
+    return Compose(t)
 
 
 def get_val_transforms(keys=["image", "label"], image_keys=["image"]):
@@ -82,7 +118,8 @@ def get_val_transforms(keys=["image", "label"], image_keys=["image"]):
     )
 
 
-def get_train_dataloader(flair_path, gts_path, num_workers, cache_rate=0.1, patch_size=96):
+def get_train_dataloader(flair_path, gts_path, num_workers, cache_rate=0.1,
+                         patch_size=96, aug_profile="full"):
     """
     Get dataloader for training 
     Args:
@@ -104,8 +141,11 @@ def get_train_dataloader(flair_path, gts_path, num_workers, cache_rate=0.1, patc
 
     print("Number of training files:", len(files))
 
-    ds = CacheDataset(data=files, transform=get_train_transforms(patch_size=patch_size),
-                      cache_rate=cache_rate, num_workers=num_workers)
+    ds = CacheDataset(
+        data=files,
+        transform=get_train_transforms(patch_size=patch_size, aug_profile=aug_profile),
+        cache_rate=cache_rate, num_workers=num_workers,
+    )
     return DataLoader(ds, batch_size=1, shuffle=True,
                       num_workers=num_workers)
 

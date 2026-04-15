@@ -61,17 +61,17 @@ MODES = {
     "full": {
         "epochs":      150,
         "seeds":       [1, 2, 3],
-        "patch_sizes": [128],
+        "patch_sizes": [64, 96],
         "models":      ["unet"],
         "num_workers": 8,
         "n_jobs":      8,
         "sw_batch_size": 8,
     },
-    # Swin-only locality sweep. 
+    # Swin-only locality sweep.
     "swin": {
         "epochs":      150,
         "seeds":       [1, 2, 3],
-        "patch_sizes": [64, 96, 128],
+        "patch_sizes": [64, 96],
         "models":      ["swin"],
         "num_workers": 8,
         "n_jobs":      8,
@@ -81,8 +81,17 @@ MODES = {
     "extra": {
         "epochs":      150,
         "seeds":       [1, 2],
-        "patch_sizes": [64, 128],
+        "patch_sizes": [64, 96],
         "models":      ["unet", "swin"],
+        "num_workers": 8,
+        "n_jobs":      8,
+        "sw_batch_size": 8,
+    },
+    "ablation": {
+        "epochs":      150,
+        "seeds":       [1, 2, 3],
+        "patch_sizes": [96],
+        "models":      ["unet"],
         "num_workers": 8,
         "n_jobs":      8,
         "sw_batch_size": 8,
@@ -90,7 +99,7 @@ MODES = {
 }
 
 
-def build_run_cmd(mode_cfg, output_root):
+def build_run_cmd(mode_cfg, output_root, aug_profile):
     """Build the argv for `python run.py ...` from a preset dict.
 
     Pod-stop logic lives in run_dev.py (this file) — run.py is just a
@@ -106,6 +115,7 @@ def build_run_cmd(mode_cfg, output_root):
         "--n_jobs", str(mode_cfg["n_jobs"]),
         "--sw_batch_size", str(mode_cfg["sw_batch_size"]),
         "--output_root", output_root,
+        "--aug_profile", aug_profile,
         "--skip_install",  # devs install once; don't waste time on every dev run
     ]
 
@@ -265,6 +275,14 @@ def main():
     parser.add_argument("--output_root", default="download",
                         help="Output root passed through to run.py "
                              "(default: download — single-folder for RunPod).")
+    parser.add_argument("--aug_profile", default="full",
+                        choices=["full", "no_acquisition", "no_geometric",
+                                 "no_intensity", "minimal"],
+                        help="Augmentation profile forwarded to run.py "
+                             "(and from there to the train scripts). "
+                             "run.py nests its entire output tree under "
+                             "<output_root>/run_aug-<profile>/, so baseline "
+                             "and ablation runs do not collide.")
     args = parser.parse_args()
 
     cfg = MODES[args.mode]
@@ -274,7 +292,8 @@ def main():
     # detached run finishes — exactly what we're trying to avoid).
     stop_pod = args.stop_pod or bool(args.tmux_session)
 
-    cmd = build_run_cmd(cfg, output_root=args.output_root)
+    cmd = build_run_cmd(cfg, output_root=args.output_root,
+                        aug_profile=args.aug_profile)
 
     if args.tmux_session:
         launch_in_tmux(args.tmux_session, cmd, stop_pod=stop_pod)

@@ -45,6 +45,9 @@ parser.add_argument('--threshold', type=float, default=0.4,
 parser.add_argument('--patch_size', type=int, default=96,
                     help='Cubic training patch size (P, P, P). Must be a '
                          'multiple of 32; recommended values {64, 96, 128}.')
+parser.add_argument('--aug_profile', type=str, default='full',
+                    help='Augmentation profile name (see data_load.AUG_PROFILES). '
+                         'Controls which augmentation groups are active at training time.')
 
 
 def get_default_device():
@@ -74,7 +77,8 @@ def main(args):
     train_loader = get_train_dataloader(flair_path=args.path_train_data,
                                         gts_path=args.path_train_gts,
                                         num_workers=args.num_workers,
-                                        patch_size=args.patch_size)
+                                        patch_size=args.patch_size,
+                                        aug_profile=args.aug_profile)
     val_loader = get_val_dataloader(flair_path=args.path_val_data, 
                                     gts_path=args.path_val_gts, 
                                     num_workers=args.num_workers)
